@@ -1,0 +1,148 @@
+/* Shared shape: decorative backgrounds only. No root/content clipping, masks,
+   pseudo-elements, hit-area changes, or additional overlay stacking contexts.
+   Utility-layer classes remain free to override this component-layer treatment. */
+@layer components {
+	:root {
+		--cut-compact: 6px;
+		--cut-standard: 8px;
+		--cut-large: 16px;
+		--cut-border-width: 1px;
+	}
+
+	/* Roles are assigned independently of the drawing pattern. */
+	.cut-surface {
+		--cut-size: var(--cut-standard);
+		--cut-fill: var(--background);
+		--cut-stroke: var(--border);
+		--cut-left-width: var(--cut-border-width);
+		--cut-top-width: var(--cut-border-width);
+	}
+	.cut-compact { --cut-size: var(--cut-compact); }
+	.cut-large { --cut-size: var(--cut-large); }
+	.cut-primary { --cut-fill: var(--primary); --cut-stroke: var(--primary); }
+	.cut-secondary { --cut-fill: var(--secondary); }
+	.cut-card { --cut-fill: var(--card); }
+	.cut-popover { --cut-fill: var(--popover); }
+	.cut-field { --cut-stroke: var(--input); }
+	.cut-surface:where([data-size='default'], [data-size='lg'], [data-size='icon-lg']) {
+		--cut-size: var(--cut-standard);
+	}
+	.cut-destructive {
+		--cut-fill: color-mix(in oklch, var(--background), var(--destructive) 10%);
+		--cut-stroke: var(--destructive);
+	}
+	.cut-inverted { --cut-fill: var(--primary); --cut-stroke: var(--primary); }
+
+	/* Square-corner fallback. Existing border widths/padding remain unchanged. */
+	.cut-surface {
+		border-radius: 0;
+		background-color: var(--cut-fill);
+		border-color: var(--cut-stroke);
+		box-shadow: none;
+	}
+
+	@supports (background: linear-gradient(45deg, transparent 50%, black 50%)) {
+		.cut-surface {
+			/* The first layer draws a true 1px diagonal, not a stair-step border.
+			   The next four paint the straight edges; the last two fill the face.
+			   A zero cut makes joined controls square without a second pattern. */
+			background-color: transparent;
+			border-color: transparent;
+			background-image:
+				linear-gradient(45deg, var(--cut-fill) calc(50% - var(--cut-border-width)), var(--cut-stroke) calc(50% - var(--cut-border-width)) 50%, transparent 50%),
+				linear-gradient(var(--cut-stroke), var(--cut-stroke)),
+				linear-gradient(var(--cut-stroke), var(--cut-stroke)),
+				linear-gradient(var(--cut-stroke), var(--cut-stroke)),
+				linear-gradient(var(--cut-stroke), var(--cut-stroke)),
+				linear-gradient(var(--cut-fill), var(--cut-fill)),
+				linear-gradient(var(--cut-fill), var(--cut-fill));
+			background-size:
+				var(--cut-size) var(--cut-size),
+				calc(100% - var(--cut-size)) var(--cut-top-width, var(--cut-border-width)),
+				var(--cut-border-width) calc(100% - var(--cut-size)),
+				100% var(--cut-border-width),
+				var(--cut-left-width, var(--cut-border-width)) 100%,
+				calc(100% - var(--cut-size)) 100%,
+				var(--cut-size) calc(100% - var(--cut-size));
+			background-position: right top, left top, right bottom, left bottom, left top, left top, right bottom;
+			background-repeat: no-repeat;
+			background-origin: border-box;
+			background-clip: border-box;
+		}
+	}
+
+	.cut-surface:where(:hover:not(:disabled):not([aria-disabled='true'])) {
+		--cut-stroke: color-mix(in oklch, var(--border), var(--foreground) 35%);
+	}
+	.cut-primary:where(:hover:not(:disabled):not([aria-disabled='true'])) {
+		--cut-fill: color-mix(in oklch, var(--primary), var(--background) 15%);
+		--cut-stroke: var(--primary);
+	}
+	.cut-secondary:where(:hover:not(:disabled):not([aria-disabled='true'])) {
+		--cut-fill: color-mix(in oklch, var(--secondary), var(--foreground) 5%);
+	}
+	.cut-destructive:where(:hover:not(:disabled):not([aria-disabled='true'])) {
+		--cut-fill: color-mix(in oklch, var(--background), var(--destructive) 16%);
+		--cut-stroke: var(--destructive);
+	}
+	.cut-surface:where([aria-expanded='true'], [data-state='open'], [data-selected], [aria-pressed='true']) {
+		--cut-stroke: var(--primary);
+	}
+	.cut-surface:where(:active:not(:disabled):not([aria-disabled='true'])) {
+		--cut-stroke: var(--primary);
+	}
+	.cut-surface:where([aria-invalid='true']),
+	.cut-field:has([aria-invalid='true']) {
+		--cut-stroke: var(--destructive);
+	}
+	.cut-surface:where(:disabled, [aria-disabled='true']) { opacity: 0.5; }
+	.cut-surface:focus-visible,
+	.cut-surface:has([data-slot='input-group-control']:focus-visible) {
+		--cut-stroke: var(--ring);
+		outline: 2px solid var(--ring);
+		outline-offset: 3px;
+	}
+	.cut-surface[aria-invalid='true']:focus-visible,
+	.cut-field:has([aria-invalid='true']:focus-visible) {
+		--cut-stroke: var(--destructive);
+		outline-color: var(--destructive);
+	}
+	.cut-field:disabled { --cut-fill: var(--muted); }
+
+	/* A joined group gets a cut only on its outside top-right corner. Interior
+	   edges remain square, including when native select wrappers are present. */
+	[data-slot='button-group'][data-orientation='horizontal'] > .cut-surface:has(~ [data-slot]),
+	[data-slot='button-group'][data-orientation='vertical'] > .cut-surface:not(:first-child) {
+		--cut-size: 0px;
+	}
+	[data-slot='button-group'] > .cut-surface { border-radius: 0 !important; }
+	[data-slot='button-group'][data-orientation='horizontal'] > .cut-surface:not(:first-child) { --cut-left-width: 0px; }
+	[data-slot='button-group'][data-orientation='vertical'] > .cut-surface:not(:first-child) { --cut-top-width: 0px; }
+	[data-slot='input-group'] [data-slot='input-group-control'] { background: transparent; }
+
+	/* Quiet, rectangular internal states. Familiar control geometry is retained. */
+	[data-slot='tabs-list'], [data-slot='tabs-trigger'],
+	[data-slot='dropdown-menu-item'], [data-slot='context-menu-item'],
+	[data-slot='menubar-item'], [data-slot='command-item'], [data-slot='select-item'] {
+		border-radius: 0;
+		box-shadow: none;
+	}
+	[data-slot='tabs-trigger'][data-state='active'], [data-slot='tabs-trigger'][data-active] {
+		box-shadow: inset 0 -2px 0 var(--primary);
+	}
+	[data-slot='sidebar-menu-button'] { border-radius: 0; }
+
+	/* Firmer lettering and exposed geometry, without changing control metrics. */
+	[data-slot='button'], [data-slot='select-trigger'], [data-slot='tabs-trigger'] {
+		font-weight: 600;
+		letter-spacing: 0.015em;
+	}
+	[data-slot='badge'], [data-slot='kbd'] { border-radius: 0; }
+}
+
+@supports not (background: linear-gradient(45deg, transparent 50%, black 50%)) {
+	.cut-surface {
+		background: var(--cut-fill);
+		border: var(--cut-border-width) solid var(--cut-stroke);
+	}
+}

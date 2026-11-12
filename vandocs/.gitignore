@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+.source/
+*.tsbuildinfo
+next-env.d.ts
+.svelte-kit/
+.single-build/
+.site-build/
+test-results/
+playwright-report/

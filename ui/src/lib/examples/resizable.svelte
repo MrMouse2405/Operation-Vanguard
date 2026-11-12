@@ -1,0 +1,28 @@
+<!-- Adapted from shadcn-svelte 3c4152d7d3904e76f6f756ec8ffca7c9ec72f977; MIT, see THIRD_PARTY.md. -->
+<script lang="ts">
+	import * as Resizable from "$lib/components/ui/resizable/index.js";
+</script>
+
+<Resizable.PaneGroup direction="horizontal" class="max-w-sm rounded-lg border">
+	<Resizable.Pane defaultSize={50}>
+		<div class="flex h-[200px] items-center justify-center p-6">
+			<span class="font-semibold">One</span>
+		</div>
+	</Resizable.Pane>
+	<Resizable.Handle withHandle />
+	<Resizable.Pane defaultSize={50}>
+		<Resizable.PaneGroup direction="vertical">
+			<Resizable.Pane defaultSize={25}>
+				<div class="flex h-full items-center justify-center p-6">
+					<span class="font-semibold">Two</span>
+				</div>
+			</Resizable.Pane>
+			<Resizable.Handle withHandle />
+			<Resizable.Pane defaultSize={75}>
+				<div class="flex h-full items-center justify-center p-6">
+					<span class="font-semibold">Three</span>
+				</div>
+			</Resizable.Pane>
+		</Resizable.PaneGroup>
+	</Resizable.Pane>
+</Resizable.PaneGroup>

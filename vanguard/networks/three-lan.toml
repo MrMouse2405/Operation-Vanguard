@@ -1,0 +1,19 @@
+# Small enough to draw on paper. The middle router carries transit traffic.
+version = 1
+routers = [{ id = 1 }, { id = 2 }, { id = 3 }]
+lans = [{ id = 10, router = 1 }, { id = 20, router = 2 }, { id = 30, router = 3 }]
+workstations = [
+  { id = 1001, lan = 10, compromised = true },
+  { id = 1002, lan = 10 },
+  { id = 1003, lan = 20 },
+  { id = 1004, lan = 20 },
+  { id = 1005, lan = 30 },
+  { id = 1006, lan = 30 },
+]
+servers = [{ id = 2001, lan = 30 }]
+connections = [{ from = 1, to = 2 }, { from = 2, to = 3 }]
+
+[simulation]
+seed = 7
+tick_limit = 300
+tick_ms = 0

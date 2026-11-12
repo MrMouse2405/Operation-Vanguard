@@ -1,0 +1,40 @@
+# Explicit topology: no generated nodes, implicit links only within each LAN.
+version = 1
+routers = [{ id = 1 }, { id = 2 }, { id = 3 }, { id = 4 }]
+lans = [
+  { id = 1, router = 1 },
+  { id = 2, router = 2 },
+  { id = 3, router = 3 },
+  { id = 4, router = 4 },
+]
+workstations = [
+  { id = 1001, lan = 1, compromised = true },
+  { id = 1002, lan = 1 },
+  { id = 1003, lan = 1 },
+  { id = 1004, lan = 1 },
+  { id = 1005, lan = 2 },
+  { id = 1006, lan = 2 },
+  { id = 1007, lan = 2 },
+  { id = 1008, lan = 2 },
+  { id = 1009, lan = 3 },
+  { id = 1010, lan = 3 },
+  { id = 1011, lan = 3 },
+  { id = 1012, lan = 3 },
+  { id = 1013, lan = 4 },
+  { id = 1014, lan = 4 },
+  { id = 1015, lan = 4 },
+  { id = 1016, lan = 4 },
+]
+servers = [{ id = 1017, lan = 1 }, { id = 1018, lan = 4 }]
+# Undirected physical router links. Host attachment follows LAN membership.
+connections = [
+  { from = 1, to = 2 },
+  { from = 2, to = 4 },
+  { from = 4, to = 3 },
+  { from = 3, to = 1 },
+]
+
+[simulation]
+seed = 1
+tick_ms = 100
+tick_limit = 1000 # 0 means unlimited.

@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-12T00:30:00Z",
+  "title": "Design System: Operation Vanguard",
+  "extensions": {
+    "shadows": [
+      { "name": "dialog", "value": "0 20px 80px #0009", "purpose": "Scenario dialog overlay; workspace panels remain flat." }
+    ],
+    "breakpoints": [
+      { "name": "stacked-mobile", "value": "650px" },
+      { "name": "inspector-below", "value": "1000px" },
+      { "name": "compact-desktop", "value": "1250px" },
+      { "name": "wide-desktop", "value": "1700px" },
+      { "name": "mail-folders-collapsed", "value": "800px" },
+      { "name": "graph-container-stacked", "value": "500px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary execution control",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Engine-state-dependent Start, Pause, or Resume action.",
+      "html": "<button class=\"ds-primary\">Start</button>",
+      "css": ".ds-primary{font:700 11px system-ui,sans-serif;background:var(--green,#54dfb3);color:#082219;border:1px solid var(--green,#54dfb3);border-radius:3px;padding:7px 11px;cursor:pointer}.ds-primary:hover{background:#83efca}.ds-primary:focus-visible{outline:2px solid var(--green,#54dfb3);outline-offset:2px}.ds-primary:disabled{opacity:.4;cursor:not-allowed}"
+    },
+    {
+      "name": "Secondary control",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Forward stepping and secondary workspace actions.",
+      "html": "<button class=\"ds-secondary\">Forward</button>",
+      "css": ".ds-secondary{font:11px system-ui,sans-serif;color:var(--text,#e0e9ef);background:#19232d;border:1px solid #354350;border-radius:3px;padding:7px 11px;cursor:pointer}.ds-secondary:hover{background:#263540;border-color:#70818c}.ds-secondary:focus-visible{outline:2px solid var(--green,#54dfb3);outline-offset:2px}.ds-secondary:disabled{opacity:.4;cursor:not-allowed}"
+    },
+    {
+      "name": "Explorer search",
+      "kind": "input",
+      "description": "Global host search; Ctrl or Command K and the clickable badge focus the live control. Focus belongs to the entire field.",
+      "html": "<label class=\"ds-search\"><svg aria-hidden=\"true\" width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><input aria-label=\"Search all hosts\" placeholder=\"Find ID, hostname, LAN…\"/></label>",
+      "css": ".ds-search{display:flex;align-items:center;gap:8px;border:1px solid var(--line,#253440);border-radius:4px;padding:0 8px;background:#0a131c;color:var(--muted,#93a5b5);transition:border-color .15s}.ds-search:focus-within{border-color:var(--green,#54dfb3);outline:2px solid var(--green,#54dfb3);outline-offset:2px}.ds-search>svg{flex-shrink:0}.ds-search input{font:11px system-ui,sans-serif;border:0;background:none;min-width:0;flex:1;width:0;padding:10px 0;color:var(--text,#e0e9ef);caret-color:var(--green,#54dfb3);outline:none;box-shadow:none;border-radius:0}.ds-search input:focus-visible{outline:none}"
+    },
+    {
+      "name": "Explorer navigation",
+      "kind": "nav",
+      "description": "Hierarchy and result-view navigation with a thin active underline.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Explorer views\"><button class=\"ds-active\">Hierarchy</button><button>Node results</button></nav>",
+      "css": ".ds-nav{display:flex;gap:20px;border-bottom:1px solid var(--line,#253440);padding:0 15px;background:var(--panel,#101922)}.ds-nav button{font:11px system-ui,sans-serif;color:var(--muted,#93a5b5);background:none;border:0;border-radius:0;padding:10px 0;cursor:pointer}.ds-nav button.ds-active{color:var(--text,#e0e9ef);box-shadow:inset 0 -2px var(--green,#54dfb3)}.ds-nav button:hover{background:#263540}.ds-nav button:focus-visible{outline:2px solid var(--green,#54dfb3);outline-offset:2px}"
+    },
+    {
+      "name": "Runtime status",
+      "kind": "chip",
+      "description": "Noninteractive engine-state label; amber is the default control-state treatment.",
+      "html": "<span class=\"ds-state\">PAUSED</span>",
+      "css": ".ds-state{display:inline-block;font:10px monospace;letter-spacing:1px;color:var(--amber,#f8c176);background:#ffbf6912;border:1px solid #ffbf6935;padding:6px 9px;border-radius:3px}"
+    },
+    {
+      "name": "LAN aggregate",
+      "kind": "card",
+      "refersTo": "lan-card",
+      "description": "Illustrative aggregate tile; live labels and counts come from snapshots, not this preview.",
+      "html": "<button class=\"ds-lan\"><strong>LAN 1</strong><span>Host health aggregate</span><span class=\"ds-server\">Server inventory</span><small>Select to explore hosts</small></button>",
+      "css": ".ds-lan{display:flex;flex-direction:column;align-items:stretch;text-align:left;gap:10px;min-height:140px;padding:14px;background:#12232e;color:var(--text,#e0e9ef);border:1px solid #38515f;border-radius:4px;cursor:pointer}.ds-lan strong{font:11px monospace}.ds-lan span,.ds-lan small{font:9px monospace;color:var(--muted,#93a5b5)}.ds-lan .ds-server{color:var(--blue,#90b8fc)}.ds-lan:hover{background:#263540;border-color:#70818c}.ds-lan:focus-visible{outline:2px solid var(--green,#54dfb3);outline-offset:2px}"
+    },
+    {
+      "name": "Mail outline action",
+      "kind": "button",
+      "refersTo": "mail-button-outline",
+      "description": "Small shadcn-svelte outline action for copying an email link or returning to all mail.",
+      "html": "<button class=\"ds-mail-outline\"><svg aria-hidden=\"true\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/></svg>Copy email link</button>",
+      "css": ".ds-mail-outline{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:32px;padding:0 12px;border:1px solid #b8b8b8;border-radius:6px;background:#fff;color:#242424;font:500 12px 'Segoe UI',system-ui,sans-serif;white-space:nowrap;cursor:pointer;transition:background-color .15s}.ds-mail-outline:hover{background:#e6f1fb}.ds-mail-outline:focus-visible{outline:2px solid var(--mail-blue,#0067b8);outline-offset:-2px}.ds-mail-outline:disabled{pointer-events:none;opacity:.5}@media(prefers-reduced-motion:reduce){.ds-mail-outline{transition:none}}"
+    },
+    {
+      "name": "Mail ghost action",
+      "kind": "button",
+      "refersTo": "mail-button-ghost",
+      "description": "Quiet toolbar action for read and star controls.",
+      "html": "<button class=\"ds-mail-ghost\">Mark unread</button>",
+      "css": ".ds-mail-ghost{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:32px;padding:0 12px;border:0;border-radius:6px;background:transparent;color:#242424;font:500 12px 'Segoe UI',system-ui,sans-serif;cursor:pointer;transition:background-color .15s,color .15s}.ds-mail-ghost:hover{background:#e6f1fb;color:#005a9e}.ds-mail-ghost:focus-visible{outline:2px solid var(--mail-blue,#0067b8);outline-offset:-2px}.ds-mail-ghost:disabled{pointer-events:none;opacity:.5}@media(prefers-reduced-motion:reduce){.ds-mail-ghost{transition:none}}"
+    },
+    {
+      "name": "Mail search",
+      "kind": "input",
+      "refersTo": "mail-search",
+      "description": "Search across sender, subject and body in every folder; white whole-field focus sits against the blue app bar.",
+      "html": "<div class=\"ds-mail-bar\"><label class=\"ds-mail-search\"><svg aria-hidden=\"true\" width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><input aria-label=\"Search all documentation\" placeholder=\"Search mail, topics, or Lua functions\"/></label></div>",
+      "css": ".ds-mail-bar{padding:12px;background:#0f6cbd}.ds-mail-search{display:flex;align-items:center;gap:10px;height:34px;max-width:620px;border:1px solid transparent;border-radius:4px;padding:0 10px;background:#eef6fc;color:#34536b}.ds-mail-search:focus-within{outline:2px solid white;outline-offset:2px}.ds-mail-search>svg{flex-shrink:0}.ds-mail-search input{min-width:0;width:100%;height:100%;border:0;padding:0;background:transparent;color:#242424;font:13px 'Segoe UI',system-ui,sans-serif;caret-color:var(--mail-blue,#0067b8);outline:none}.ds-mail-search input::placeholder{color:#526477;opacity:1}.ds-mail-search input:focus-visible{outline:none}"
+    },
+    {
+      "name": "Selected documentation email",
+      "kind": "nav",
+      "refersTo": "mail-message-selected",
+      "description": "Sender, subject and preview form one stable lesson link; unread state adds weight and a marker.",
+      "html": "<nav aria-label=\"Documentation emails\"><a class=\"ds-mail-message\" href=\"/docs/\" aria-current=\"page\"><strong>Capt. Network</strong><h3>Welcome aboard! Let’s run your first agent</h3><p>One Lua file, a network, and a Start button. You’ve got this.</p><small>1 of 20 · Getting started</small></a></nav>",
+      "css": ".ds-mail-message{display:block;padding:16px 32px 15px 20px;background:#e6f1fb;color:#242424;border-bottom:1px solid #ededed;box-shadow:inset 1px 0 #0f6cbd;text-decoration:none;font-family:'Segoe UI',system-ui,sans-serif}.ds-mail-message strong{font-size:12px;font-weight:400}.ds-mail-message h3{font-size:13px;font-weight:500;line-height:1.5;margin:6px 0 5px}.ds-mail-message p{font-size:12px;line-height:1.55;color:#616161;margin:0}.ds-mail-message small{display:block;margin-top:9px;font-size:10px;color:#536a7d}.ds-mail-message:hover{background:#e6f1fb}.ds-mail-message:focus-visible{outline:2px solid var(--mail-blue,#0067b8);outline-offset:-2px}"
+    }
+  ],
+  "narrative": {
+    "overview": "The user-supplied `operation_vanguard_dashboard(1).html` pins the visual direction: dark slate, semantic emerald/amber/red/blue, compact sans-serif controls, monospace telemetry, and consistent Lucide strokes. The shipped explorer supports searching, filtering, and drilling into LANs while preserving the engine as the source of truth.\n\nThe user-approved documentation replacement is a distinct Outlook-style mailbox: blue application chrome, pale gray folders, white message surfaces, fine separators and roomy reading typography. This is a multi-surface system: the mailbox extends the product without replacing the dashboard identity.",
+    "keyCharacteristics": [
+      "Dense, bordered operational panels with restrained depth.",
+      "Aggregate overview, paginated inventory, bounded LAN detail.",
+      "Explicit separation of operator truth, agent evidence, and match scores.",
+      "A blue-and-white documentation mailbox with readable lessons and familiar mail states."
+    ],
+    "rules": [
+      { "name": "The State Before Decoration Rule", "body": "Use semantic accents for real state, selection, and actions; keep structural surfaces slate. Graph rendering retains its implemented base dashboard state colors, rather than silently implying every renderer uses the explorer override values.", "section": "colors" }
+    ],
+    "dos": [
+      "Do preserve the pinned slate palette, semantic state labels, and Lucide outline consistency.",
+      "Do keep aggregate health, physical LAN detail, operator truth, and recorded evidence explicitly distinguished.",
+      "Do retain pagination, selected-host page alignment, and the expanded mobile telemetry selector.",
+      "Do preserve the mailbox's blue-and-white identity, whole-field search focus and spacious reading typography alongside the slate dashboard.",
+      "Do describe verification precisely: the supplied completion evidence reports 39 Rust, 8 dashboard browser and 3 docs browser tests passing, both Svelte checks with zero errors/warnings, and a mechanical UI detector result of `[]`. Mail and explorer captures cover 390px and 1440px; the latest mobile graph layout is source-verified, with screenshot recapture pending."
+    ],
+    "donts": [
+      "Don't substitute decorative counters, invented observations, or inferred success for engine data.",
+      "Don't turn the explorer into a whole-world graph or restore the retired gallery's visual rules.",
+      "Don't treat the reported Chromium checks as proof of comprehensive accessibility or cross-browser verification."
+    ]
+  }
+}

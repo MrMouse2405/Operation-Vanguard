@@ -1,0 +1,24 @@
+[package]
+name = "Operation-Vanguard"
+version = "0.1.0"
+edition = "2024"
+default-run = "vanguard"
+description = "Deterministic Lua-agent network defence simulator with an embedded web dashboard"
+license = "MIT"
+repository = "https://github.com/MrMouse2405/Operation-Vanguard"
+include = ["/src/**", "/ui/src/**", "/ui/static/**", "/ui/package.json", "/ui/bun.lock", "/ui/vite.config.ts", "/ui/tsconfig.json", "/ui/*.js", "/ui/components.json", "/ui/SHADCN-LICENSE.md", "/ui/THIRD_PARTY.md", "/build.rs", "/Cargo.lock", "/LICENSE", "/licenses/**", "/README.md"]
+
+[[bin]]
+name = "vanguard"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+mlua = { version = "=0.12.2", features = ["lua55","vendored"] }
+rocket = { version = "0.5.1", features = ["json"] }
+rust-embed = { version = "8", features = ["debug-embed"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+rocket_ws = "0.1.1"
+toml = "0.9"

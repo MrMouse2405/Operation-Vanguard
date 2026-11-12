@@ -1,0 +1,14 @@
+<script lang="ts">
+	import type { Snapshot } from './types';
+	import JsonTree from './JsonTree.svelte';
+	let { snapshot, agent = '' }: { snapshot: Snapshot | null; agent?: string } = $props();
+	let agents = $derived((snapshot?.agents ?? []).filter(a => !agent || String(a.id) === agent));
+	let hosts = $derived(snapshot?.nodes.filter(n => n.type !== 'ROUTER') ?? []);
+	const number = (n: any) => n == null ? '—' : Number(n).toLocaleString();
+	const bytes = (n: any) => n == null ? '—' : `${number(n)} B`;
+	const utilization = (a: any) => `${Math.round(100 * (a.last_fuel ?? 0) / Math.max(1, a.allowance ?? snapshot?.scenario.fuel_per_tick ?? 1))}% utilized`;
+</script>
+<div class="runtime-summary"><span>Enemy updates <strong>{number(snapshot?.enemy_updates)}</strong></span><span>Per-tick allowance <strong>{number(snapshot?.scenario.fuel_per_tick)}</strong></span><span>Quantum <strong>{number(snapshot?.scenario.instruction_quantum)}</strong></span><span>Memory limit <strong>{bytes(snapshot?.scenario.memory_limit)}</strong></span></div>
+<div class="runtime-summary" aria-label="Global host outcomes"><span>Global hosts: healthy <strong>{hosts.filter(n => !n.compromised && n.exposure == null).length}</strong></span><span>In Danger <strong>{hosts.filter(n => !n.compromised && n.exposure != null).length}</strong></span><span>Compromised <strong>{hosts.filter(n => n.compromised).length}</strong></span><span>Immune routers <strong>{snapshot?.nodes.filter(n => n.type === 'ROUTER').length ?? 0}</strong></span><span>Online <strong>{hosts.filter(n => n.power === 'ONLINE').length}</strong></span><span>Offline <strong>{hosts.filter(n => n.power === 'OFFLINE').length}</strong></span><span>Restoring <strong>{hosts.filter(n => n.power === 'RESTORING').length}</strong></span></div>
+<div class="table-scroll"><table class="stats-table"><thead><tr><th>Vanguard</th><th>Total fuel</th><th>Last-tick fuel</th><th>Tick allowance</th><th>Memory / peak</th><th>Coroutines</th><th>Backlog</th><th>Errors</th><th>Slots</th></tr></thead><tbody>{#each agents as a (a.id)}<tr><th>A{a.id}<span class="cell-note">R{a.router_id}</span></th><td>{number(a.fuel)}</td><td>{number(a.last_fuel)}</td><td>{number(a.allowance ?? snapshot?.scenario.fuel_per_tick)}<span class="cell-note">{utilization(a)}</span></td><td>{bytes(a.memory_bytes)}<span class="cell-note">peak {bytes(a.peak_memory_bytes)}</span></td><td>{number(a.coroutines)}</td><td>{number(a.backlog)}</td><td class:failed={a.runtime_errors > 0}>{number(a.runtime_errors)}</td><td>{a.slots ? `${a.slots.running} / ${a.slots.capacity}` : `${snapshot?.jobs.filter(j => j.agent_id === a.id && j.state === 'RUNNING').length ?? 0} / 5`}</td></tr>{:else}<tr><td colspan="9" class="empty">No runtime metrics available.</td></tr>{/each}</tbody></table></div>
+<details class="scenario-details"><summary>Scenario and published operation costs</summary><JsonTree value={snapshot?.scenario ?? {}} /></details>
