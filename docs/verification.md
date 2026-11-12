@@ -5,23 +5,25 @@
 ### 10,000-node final fixture — 2026-11-12
 
 - Added `final-test/network.toml`, reproducible with `final-test/generate.py`.
-  Independently checked exactly 10,000 unique nodes: 24 routers, 9,928 workstations,
-  48 servers; one LAN/router, connected 34-edge topology, eight initial infections,
-  29,784 unique valid required-service pairs, three pairs/client, every server used.
-- Four sites have mixed 1,200/400/160–161-workstation LANs and weighted local,
+  Revised to exactly 10,000 unique nodes: 40 routers, 9,880 workstations,
+  80 servers; one LAN/router, connected 54-edge topology, eight initial infections,
+  29,640 unique valid required-service pairs, three pairs/client, every server used.
+  Independently verified the 500-node/LAN cap including routers and servers:
+  eight LANs each at 500, 351, 101 and 97 nodes; four each at 251 and 151 nodes.
+- Four sites have mixed 497/348/248/148/98/94-workstation LANs and weighted local,
   within-site and remote service dependencies (71.43% cross-LAN service weight).
   Standard resource/infection budgets; 240-tick deadline; 14-tick recovery,
   90% required-service threshold and 30-tick total-outage grace.
-- Release CLI `--print-config` accepted it. An ordinary-API, topology-independent
+- Release CLI accepted it. An ordinary-API, topology-independent
   evidence-led feasibility agent won at **T45 / 999.91** with zero runtime errors.
   Two full runs matched all **46 hashes**. Control source and replays remain in
   ignored `.impeccable/review/`, outside the distributable final-test files.
 - Basic/Coordinated/Advanced passed 12-tick smoke runs with zero errors and eight
   remaining compromised hosts. These are not terminal loss benchmarks. Separately,
   the ordered-scan deadline bound is at most 400 HOST_SCANs/router by T240, even
-  without other work; four campus sources are at local position 1,200.
+  without other work; four campus sources are at local position 497.
 - Regeneration byte-matches SHA256
-  `5eb49c133f328f39299ef6312f9ba25267cbb73cee195c4cd989c85455fd0938`.
+  `2194c165026c48057240f99354173385ce538a6258c1c6ce0f65586729a95e9a`.
   The fixture is separate from the small default topology and public handbook
   sample/download collection.
 

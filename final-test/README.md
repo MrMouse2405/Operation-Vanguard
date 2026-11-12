@@ -18,12 +18,13 @@ vanguard --script agent.lua --network final-test/network.toml --headless --ticks
 | Setting | Value |
 | --- | ---: |
 | Total nodes | **10,000** |
-| Routers / LANs | 24 / 24 |
-| Workstations | 9,928 |
-| Servers | 48 |
+| Routers / LANs | 40 / 40 |
+| Workstations | 9,880 |
+| Servers | 80 |
+| Maximum nodes per LAN, including router and servers | **500** |
 | Initially compromised workstations | 8 |
-| Router links | 34, undirected |
-| Required client/server pairs | 29,784 |
+| Router links | 54, undirected |
+| Required client/server pairs | 29,640 |
 | Deadline | 240 ticks |
 | Recovery verification | 14 consecutive ticks |
 | Required-service recovery threshold | 90% of weighted pairs |
@@ -37,9 +38,10 @@ Verified full recovery ends the run early under the current engine rules.
 
 ## Why this is harder than the scale sample
 
-- **Uneven workloads:** four campus LANs have 1,200 workstations each; eight
-  regional LANs have 400; twelve branches have 160 or 161. Every LAN also has
-  two servers. A policy must handle the same five slots under very different loads.
+- **Uneven workloads:** eight campus LANs have 497 workstations each; twelve
+  regional LANs have 348 or 248; twenty branches have 148, 98 or 94. Each LAN
+  also has two servers and one router, bringing its total to at most **500 nodes**.
+  A policy must handle the same five slots under very different loads.
 - **Four connected sites:** site rings and chords feed a WAN ring, with two
   additional regional WAN links. Transit filters can affect several LANs' service.
   Routes remain the engine's deterministic shortest paths; blocked paths do not
@@ -75,7 +77,7 @@ The supplied Basic, Coordinated and Advanced rolling patrols cannot complete
 their ordered campus sweeps before this deadline. Even ignoring all discovery,
 traffic scans, isolation, restoration and release work, five slots permit at
 most **400 three-tick host scans per router by tick 240**. Four initial sources
-occupy position **1,200** in those campus workstation lists. A short smoke run
+occupy position **497** in those campus workstation lists. A short smoke run
 is not a full terminal benchmark; this deadline bound explains the limitation.
 
 This demonstrates a useful baseline discriminator and a valid winning policy;
@@ -92,6 +94,6 @@ python3 final-test/generate.py
 ```
 
 This standard-library-only generator deterministically recreates the complete
-file. Change the generator, then regenerate, rather than hand-editing 29,784
+file. Change the generator, then regenerate, rather than hand-editing 29,640
 service entries. The final-test topology is kept separate from the small default
 `network.toml` and the handbook's tutorial/sample downloads.

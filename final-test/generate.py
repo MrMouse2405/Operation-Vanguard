@@ -4,21 +4,22 @@ from pathlib import Path
 import random
 
 SEED = 20261112
+SITES = 4
+LANS_PER_SITE = 10
+ROUTER_COUNT = SITES * LANS_PER_SITE
+WORKSTATION_COUNT = 10000 - 3 * ROUTER_COUNT
 rng = random.Random(SEED)
-routers = rng.sample(range(1, 997), 24)
-lans = rng.sample(range(2000, 9000), 24)
-# Four sites: one large campus, two regional LANs and three branches per site.
-sizes = []
-branch = 0
-for site in range(4):
-    sizes.extend([1200, 400, 400])
-    for _ in range(3):
-        sizes.append(161 if branch < 8 else 160)
-        branch += 1
-assert sum(sizes) == 9928
-host_ids = list(range(10001, 10001 + 9928 * 7, 7))
+routers = rng.sample(range(1, 997), ROUTER_COUNT)
+lans = rng.sample(range(2000, 9000), ROUTER_COUNT)
+# Each site has two campuses, three regional LANs and five branches.
+# Include one router and two servers in the 500-node-per-LAN cap.
+site_sizes = [497, 497, 348, 348, 248, 148, 98, 98, 94, 94]
+sizes = site_sizes * SITES
+assert sum(sizes) == WORKSTATION_COUNT
+assert max(size + 3 for size in sizes) == 500
+host_ids = list(range(10001, 10001 + WORKSTATION_COUNT * 7, 7))
 rng.shuffle(host_ids)
-servers = [[200003 + (2 * i + j) * 11 for j in range(2)] for i in range(24)]
+servers = [[200003 + (2 * i + j) * 11 for j in range(2)] for i in range(ROUTER_COUNT)]
 hosts = []
 cursor = 0
 for size in sizes:
@@ -26,29 +27,31 @@ for size in sizes:
     cursor += size
 
 # Neither ascending nor descending scans get all eight seeds quickly.
-infected = {hosts[6 * site][-1] for site in range(4)}
-infected.update([hosts[1][0], hosts[14][0], hosts[10][len(hosts[10]) // 2], hosts[23][len(hosts[23]) // 2]])
+infected = {hosts[LANS_PER_SITE * site][-1] for site in range(SITES)}
+infected.update([hosts[2][0], hosts[23][0], hosts[16][len(hosts[16]) // 2], hosts[39][len(hosts[39]) // 2]])
 assert len(infected) == 8
 edges = set()
 def link(a, b):
     assert a != b
     edges.add(tuple(sorted((routers[a], routers[b]))))
 
-for site in range(4):
-    base = site * 6
-    for offset in range(6):
-        link(base + offset, base + (offset + 1) % 6)
-    link(base + 1, base + 4)
-    link(base, ((site + 1) % 4) * 6)
+for site in range(SITES):
+    base = site * LANS_PER_SITE
+    for offset in range(LANS_PER_SITE):
+        link(base + offset, base + (offset + 1) % LANS_PER_SITE)
+    link(base + 1, base + 5)
+    link(base + 2, base + 7)
+    link(base, ((site + 1) % SITES) * LANS_PER_SITE)
 # Alternative inter-site links, without making a full mesh.
-link(1, 13)
-link(8, 20)
+link(1, 21)
+link(12, 32)
 
 lines = [
     '# Operation Vanguard final: Four Sites, One Bad Morning',
-    '# Exactly 10,000 nodes: 24 routers + 9,928 workstations + 48 servers.',
-    '# 4 campus LANs (1,200 WS), 8 regional LANs (400 WS), 12 branches (160/161 WS).',
-    '# 8 initial infections; 34 undirected router links; 29,784 required pairs.',
+    '# Exactly 10,000 nodes: 40 routers + 9,880 workstations + 80 servers.',
+    '# Four sites, each with 10 LANs. Maximum 500 nodes/LAN INCLUDING router + servers.',
+    '# Workstations/LAN: 497, 497, 348, 348, 248, 148, 98, 98, 94, 94 per site.',
+    '# 8 initial infections; 54 undirected router links; 29,640 required pairs.',
     '# Normal engine budgets/timings; no invisible waves, scripted events or cheats.',
     '# Each client requires local (weight 2), site (weight 2), remote (weight 3) service.',
     '# Generate with: python3 final-test/generate.py',
@@ -57,8 +60,9 @@ lines = [
     'lans = [',
 ]
 for i, (lan, router, size) in enumerate(zip(lans, routers, sizes)):
-    role = ['campus', 'regional A', 'regional B', 'branch A', 'branch B', 'branch C'][i % 6]
-    lines.append(f'  {{ id = {lan}, router = {router} }}, # site {i // 6 + 1}, {role}, {size} workstations + 2 servers')
+    role = ['campus A', 'campus B', 'regional A', 'regional B', 'regional C',
+            'branch A', 'branch B', 'branch C', 'branch D', 'branch E'][i % LANS_PER_SITE]
+    lines.append(f'  {{ id = {lan}, router = {router} }}, # site {i // LANS_PER_SITE + 1}, {role}, {size + 3} nodes: {size} workstations + 2 servers + router')
 lines.extend([']', 'workstations = ['])
 for i, members in enumerate(hosts):
     lines.append(f'  # LAN {lans[i]}')
@@ -76,9 +80,9 @@ lines.extend([
     'service_threshold_percent = 90', 'services = [',
 ])
 for i, members in enumerate(hosts):
-    site, offset = divmod(i, 6)
-    neighbour = site * 6 + (offset + 1) % 6
-    remote = ((site + 1) % 4) * 6
+    site, offset = divmod(i, LANS_PER_SITE)
+    neighbour = site * LANS_PER_SITE + (offset + 1) % LANS_PER_SITE
+    remote = ((site + 1) % SITES) * LANS_PER_SITE
     for index, host in enumerate(members):
         for server, weight in [(servers[i][index % 2], 2),
                                (servers[neighbour][index % 2], 2),
