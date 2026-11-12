@@ -35,7 +35,10 @@ military-rank-and-tech senders, useful subjects and independently linkable lesso
 ## Capabilities and Constraints
 The frontend is a static build served by Rocket. The engine owns every tick,
 task and outcome. Competitors preserve service while eradicating the botnet;
-scoring awards 600 service, 250 security and 150 recovery points. The browser can
+verified full recovery ends scored matches immediately. Unused deadline ticks
+receive the recovered state's service/clean fractions for fixed-horizon scoring;
+zero compromised alone is insufficient while exposure or service problems remain.
+Scoring awards 600 service, 250 security and 150 recovery points. The browser can
 inspect truth, but agents receive only their discovered evidence and messages.
 The separate VanMail guide replaces Fumadocs and teaches rules, strategy,
 all 23 Lua functions and 19 action durations in 43 emails. Its confirmed learning

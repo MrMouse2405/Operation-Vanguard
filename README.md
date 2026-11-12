@@ -172,8 +172,10 @@ See the Debug workshop in VanMail for signatures, limits and reconstruction agen
 
 See [scoring.md](scoring.md). Scored matches award **600 service + 250 security +
 150 recovery** points. Recovery needs eradication and working services sustained
-for 14 ticks; zero working required connections for 30 ticks is defeat. Matches
-otherwise continue to the fixed deadline. The dashboard and replay expose the
+for 14 ticks; verified recovery immediately ends the match in victory. Zero working
+required connections for 30 ticks is defeat. Unresolved matches reach the deadline.
+An early win credits unused ticks at its final service/clean fractions; an early
+defeat credits zero for those ticks. The dashboard and replay expose the
 authoritative score breakdown. Finite workstation/server networks are scored by
 default; `[mission]` supports explicit service pairs, windows, or `enabled=false`
 for practice. The concise competitor manual adds strategy and worked Lua examples.

@@ -1,5 +1,19 @@
 # Simulation decisions
 
+## Stop on verified victory (2026-11-12)
+
+This supersedes the fixed-deadline continuation rule below. Scored matches end at
+the first barrier that completes the configured full-recovery window. Zero
+compromised hosts alone does not finish a run: exposure, every server serving
+clients and the required-service threshold still apply. The runtime enters
+FINISHED, the outcome is VICTORY and further step calls leave the world unchanged.
+The core also rejects barriers after victory. Restart resets all accounting.
+
+To preserve fixed-horizon scoring, remaining deadline ticks are credited at the
+verified final state's service and clean-host fractions. Partial service keeps
+its actual fraction; final operational recovery keeps its existing definition.
+No virtual world/agent/enemy ticks execute. Early-defeat padding remains zero.
+
 ## Competition mailbox and optional drawings (2026-11-11)
 
 VanMail extends the Outlook mailbox to 43 character-led emails and thirteen

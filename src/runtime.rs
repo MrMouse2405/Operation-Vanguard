@@ -509,7 +509,7 @@ impl Runtime {
         let pending=self.vms.values().map(|vm|vm.pending.len()).sum::<usize>();if pending>MAX_PENDING{return Err("LIMIT_EXCEEDED: accepted pending message resources exhausted; run stopped".into());}
         bus.membership.clear();
         for (id,vm) in &self.vms {for topic in vm.handlers.borrow().topics.keys(){bus.membership.entry(topic.clone()).or_default().insert(*id);}bus.synchronized_fuel.insert(*id,vm.budget.total.get());}
-        if config.tick_limit.is_some_and(|limit|self.core.borrow().tick>=limit) || self.core.borrow().score.as_ref().is_some_and(|s|s.defeated_at.is_some()){self.control="FINISHED".into();}
+        if config.tick_limit.is_some_and(|limit|self.core.borrow().tick>=limit) || self.core.borrow().score.as_ref().is_some_and(|s|s.defeated_at.is_some() || s.verified_at.is_some()){self.control="FINISHED".into();}
         Ok(())
     }
     pub fn snapshot(&self)->Value{

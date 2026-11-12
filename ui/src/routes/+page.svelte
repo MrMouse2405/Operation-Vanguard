@@ -80,4 +80,4 @@
 	</Explorer>
 	<footer class="status-bar"><span><span class="live-dot"></span><span role="status">{runtime.status}</span> · {controlState} · {snapshot?.run_id ?? 'Connecting'}</span><span>{snapshot?.agents.length??0} immune routers / {hosts.length} hosts · {snapshot?.history.evicted??0} events evicted</span></footer>
 </div>
-<Modal bind:open={settings} title="Match rules"><p>One agent, private router VMs. Score: 600 service + 250 security + 150 recovery. Recovery points are provisional until the deadline.</p><JsonTree value={snapshot?.scenario ?? {}} /><button onclick={() => runtime.send('GetSnapshot')}>Refresh snapshot</button></Modal>
+<Modal bind:open={settings} title="Match rules"><p>One agent, private router VMs. Score: 600 service + 250 security + 150 recovery. Verified full recovery ends the match immediately; recovery points are provisional until the match ends. Early victory credits unused deadline ticks at the final service and clean-host fractions.</p><JsonTree value={snapshot?.scenario ?? {}} /><button onclick={() => runtime.send('GetSnapshot')}>Refresh snapshot</button></Modal>

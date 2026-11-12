@@ -76,7 +76,7 @@ impl Score {
         score.verified_at=None;score.defeated_at=None;score
     }
     pub fn observe(&mut self, core:&Core) {
-        if self.defeated_at.is_some() { return; }
+        if self.defeated_at.is_some() || self.verified_at.is_some() { return; }
         let mission=core.config.mission.as_ref().unwrap();
         self.working=mission.services.iter().map(|s|!core.nodes[&s.client].compromised && !core.nodes[&s.server].compromised && core.traffic_allowed(s.client,s.server)).collect();
         let total:u64=mission.services.iter().map(|s|s.weight).sum();
@@ -101,6 +101,14 @@ impl Score {
         self.service_sum+=self.service_ppm;
         self.clean_sum+=self.clean_ppm;
         if self.outage_streak>=mission.outage_ticks {self.defeated_at=Some(core.tick);}
+        // Victory freezes the recovered state. Credit its service/clean fractions
+        // for the unused deadline, preserving fixed-horizon comparisons without
+        // running idle ticks or diluting a faster recovery's score.
+        if self.verified_at.is_some() && self.defeated_at.is_none() {
+            let remaining=core.config.tick_limit.unwrap().saturating_sub(core.tick);
+            self.service_sum+=remaining*self.service_ppm;
+            self.clean_sum+=remaining*self.clean_ppm;
+        }
     }
     pub fn snapshot(&self, core:&Core)->Value {
         let mission=core.config.mission.as_ref().unwrap();
@@ -108,7 +116,7 @@ impl Score {
         let service=((60_000u128*self.service_sum as u128)/(horizon as u128*SCALE as u128)) as u64;
         let security=((25_000u128*self.clean_sum as u128)/(horizon as u128*SCALE as u128)) as u64;
         let recovery=if self.defeated_at.is_some(){0}else{15_000*self.operational_ppm/SCALE};
-        let outcome=if self.defeated_at.is_some(){"DEFEAT"}else if core.tick>=horizon {if self.verified_at.is_some(){"VICTORY"}else{"INCOMPLETE"}}else if self.verified_at.is_some(){"RECOVERED"}else if self.recovery_streak>0{"VERIFYING"}else{"ACTIVE"};
+        let outcome=if self.defeated_at.is_some(){"DEFEAT"}else if self.verified_at.is_some(){"VICTORY"}else if core.tick>=horizon{"INCOMPLETE"}else if self.recovery_streak>0{"VERIFYING"}else{"ACTIVE"};
         json!({"enabled":true,"outcome":outcome,"total":(service+security+recovery) as f64/100.,
             "service":service as f64/100.,"security":security as f64/100.,"recovery":recovery as f64/100.,
             "service_fraction":self.service_ppm as f64/SCALE as f64,"clean_fraction":self.clean_ppm as f64/SCALE as f64,
@@ -134,9 +142,10 @@ mod tests {
         for _ in 0..13 {c.barrier().unwrap();}
         assert_eq!(c.snapshot()["score"]["outcome"],"VERIFYING");
         c.barrier().unwrap();assert_eq!(c.snapshot()["score"]["verified_at"],14);
-        for _ in 14..20 {c.barrier().unwrap();}
         let s=c.snapshot()["score"].clone();
         assert_eq!(s["outcome"],"VICTORY");assert_eq!(s["total"],1000.0);
+        assert_eq!(c.tick,14);
+        assert_eq!(s["service_sum"],20*SCALE);
         assert!(c.barrier().is_err());
     }
     #[test]
@@ -153,15 +162,15 @@ mod tests {
         assert_eq!(s["service"],30.0);assert_eq!(s["security"],100.0);assert_eq!(s["recovery"],0.0);
     }
     #[test]
-    fn isolated_offline_infection_is_not_eradicated_and_recovery_can_be_lost() {
+    fn isolated_offline_infection_is_not_eradicated_and_interrupts_verification() {
         let mut c=core(40);
-        for _ in 0..14 {c.barrier().unwrap();}
-        assert_eq!(c.snapshot()["score"]["outcome"],"RECOVERED");
+        for _ in 0..13 {c.barrier().unwrap();}
+        assert_eq!(c.snapshot()["score"]["outcome"],"VERIFYING");
         let n=c.nodes.get_mut(&1001).unwrap();n.compromised=true;n.isolated=true;n.power="OFFLINE".into();
         c.barrier().unwrap();let s=c.snapshot()["score"].clone();
         assert_eq!(s["verified_at"],Value::Null);assert_eq!(s["recovery_streak"],0);
         assert!(s["clean_fraction"].as_f64().unwrap()<1.0);assert_eq!(s["service_fraction"],0.5);
-        for _ in 15..40 {c.barrier().unwrap();}
+        for _ in 14..40 {c.barrier().unwrap();}
         assert_eq!(c.snapshot()["score"]["outcome"],"INCOMPLETE");
     }
     #[test]
@@ -195,5 +204,43 @@ mod tests {
         let hash=run.state_hash();run.step().unwrap();assert_eq!(hash,run.state_hash());
         let fresh=crate::runtime::Runtime::new(config,"scoring-b".into()).unwrap();
         assert_eq!(fresh.snapshot()["score"]["service_sum"],0);assert_eq!(fresh.snapshot()["score"]["defeated_at"],Value::Null);
+    }
+
+    #[test]
+    fn early_victory_finishes_runtime_and_freezes_score_until_restart() {
+        let files=crate::network::RunFiles{script:"vanguard/agents/ostrich.lua".into(),network:"network.toml".into(),dbg:false};
+        let mut config=files.load().unwrap();config.initial_compromised=Some(vec![]);
+        let mut run=crate::runtime::Runtime::new(config.clone(),"early-win".into()).unwrap();
+        let mut repeat=crate::runtime::Runtime::new(config.clone(),"early-win-repeat".into()).unwrap();
+        for _ in 0..13 {run.step().unwrap();repeat.step().unwrap();}
+        assert_ne!(run.control,"FINISHED");assert_eq!(run.snapshot()["score"]["outcome"],"VERIFYING");
+        run.step().unwrap();repeat.step().unwrap();
+        assert_eq!(run.control,"FINISHED");assert_eq!(run.core.borrow().tick,14);
+        assert_eq!(run.snapshot()["score"]["outcome"],"VICTORY");
+        assert_eq!(run.snapshot()["score"]["total"],1000.0);
+        assert_eq!(run.state_hash(),repeat.state_hash());
+        let frozen=run.snapshot();let hash=run.state_hash();
+        for _ in 0..20 {run.step().unwrap();}
+        assert_eq!(run.state_hash(),hash);assert_eq!(run.snapshot(),frozen);
+        let fresh=crate::runtime::Runtime::new(config,"fresh".into()).unwrap();
+        assert_eq!(fresh.snapshot()["score"]["verified_at"],Value::Null);
+        assert_eq!(fresh.snapshot()["score"]["service_sum"],0);
+    }
+
+    #[test]
+    fn clean_hosts_without_required_service_do_not_win_and_credit_uses_recovered_fraction() {
+        let mut c=core(30);
+        c.nodes.get_mut(&1001).unwrap().isolated=true;
+        for _ in 0..14 {c.barrier().unwrap();}
+        assert_eq!(c.snapshot()["score"]["clean_fraction"],1.0);
+        assert_eq!(c.snapshot()["score"]["outcome"],"ACTIVE");
+        // A custom 50% threshold permits partial service, never grants 100% credit.
+        c.config.mission.as_mut().unwrap().service_threshold_percent=50;
+        for _ in 0..14 {c.barrier().unwrap();}
+        let s=c.snapshot()["score"].clone();
+        assert_eq!(s["outcome"],"VICTORY");assert_eq!(c.tick,28);
+        assert_eq!(s["service"],300.0);assert_eq!(s["security"],250.0);
+        assert_eq!(s["recovery"],49.99);assert_eq!(s["total"],599.99);
+        assert!(c.barrier().is_err());
     }
 }

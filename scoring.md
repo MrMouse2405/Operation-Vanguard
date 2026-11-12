@@ -5,12 +5,15 @@ Keep services running. Remove the botnet. Bring quarantined machines back.
 ## Outcome
 
 - **Victory:** no infected hosts or active exposure; all servers provide service;
-  at least 90% of required connections work, for 14 consecutive ticks through the deadline.
+  at least 90% of required connections work, for 14 consecutive ticks. The match
+  ends immediately at the barrier that verifies recovery.
 - **Incomplete:** reach the deadline without verified recovery.
 - **Defeat:** no required server connection works for 30 consecutive ticks.
 
 Offline or isolated infection still counts. Containment is not eradication.
-Recovery can be lost again. Matches continue to the fixed deadline after recovery.
+Recovery verification resets if its conditions break before the window completes.
+Zero compromised hosts alone is not victory: exposure and required service still count.
+Verified victory freezes the final world, jobs and score; no further ticks run.
 
 ## Score: 0–1,000
 
@@ -28,6 +31,9 @@ By default every workstation must reach every server. Scenarios may specify a
 smaller service list. All servers are critical and must have a required client.
 `scenario.mission` publishes the rules; `score` gives the live breakdown.
 Live points use the full deadline; recovery points are provisional until the end.
+Early victory credits remaining ticks at the verified state's service and clean-host
+fractions. The deadline denominator stays fixed; partial service is not promoted to
+perfect service. No simulation ticks are executed for that credit.
 Early defeat earns zero for remaining ticks and zero final-recovery points.
 
 Rank **victory first, incomplete second, defeat last**, then points within each.

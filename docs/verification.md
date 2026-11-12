@@ -2,6 +2,26 @@
 
 ## Executed checks
 
+### Stop immediately on verified full recovery — 2026-11-12
+
+- Scored matches now enter FINISHED/VICTORY on the first completed recovery window,
+  before the deadline. The core rejects further barriers and runtime step calls
+  preserve the final state. Zero compromised alone is still insufficient.
+- Remaining deadline ticks receive the verified state's actual service/clean
+  fractions; no future simulation work executes. Partial-service coverage confirms
+  this does not award perfect service or operational credit.
+- **46 Rust tests passed**, including verification-window interruption, immediate
+  victory, frozen state/score, restart reset, deterministic victory, and no victory
+  for clean hosts without the required service. **10 dashboard browser tests passed**;
+  UI Svelte check had zero errors/warnings. Release build passed.
+- Real release/headless Tutorial 1 with Basic Defender and a 300-tick limit ends
+  at **T40**, VICTORY, **988.70**. Two runs match all **41 hashes**. Real HTTP
+  StepTicks(300) also stops at T40; further stepping is rejected; Restart resets
+  tick and victory accounting. Replays: `.impeccable/review/early-victory/`.
+- Updated scoring rules, mailbox lesson and match-rules dialog; rebuilt standalone
+  VanMail. Documentation API/duration/link coverage passed. Older T300/T1000
+  measurements below describe the previous deadline-continuation behaviour.
+
 ### Single-HTML distribution is the default build
 
 - `bun --cwd vandocs run build` now emits only `out/VanMail.html` and clears stale

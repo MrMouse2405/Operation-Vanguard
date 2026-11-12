@@ -8,15 +8,17 @@ I don’t award points for looking busy. I measure whether the network works, ho
 
 Every tick counts equally. Required connections need clean, online endpoints and firewall permission. Routers don’t count as hosts. An infected host still counts as infected when it’s off.
 
-The recovery figure on your dashboard is **provisional**. Leave a machine broken at the deadline and an earlier good screenshot will not help.
+The recovery figure on your dashboard is **provisional** until the match ends. Leave a machine broken at the finish and an earlier good screenshot will not help.
 
 ## The result on your record
 
-- **Victory:** no infection or exposure, every server serving clients, and at least **90%** of weighted required connections working for **14 consecutive ticks through the deadline**.
+- **Victory:** no infection or exposure, every server serving clients, and at least **90%** of weighted required connections working for **14 consecutive ticks**. The game stops immediately when that recovery window completes.
 - **Incomplete:** you reach the deadline without meeting recovery conditions.
 - **Defeat:** no required connections work for **30 consecutive ticks**.
 
-Recovery doesn’t end the match early. If those conditions stop holding, you lose the recovery streak. Early defeat earns no credit for the remaining ticks and no final recovery points.
+If those conditions stop holding before verification completes, you lose the recovery streak. **Zero compromised alone is not enough**: exposure and service still matter. Once victory is verified, the world and score freeze.
+
+For an early win, the unused deadline ticks earn the final recovered state's service and clean-host fractions. You do not have to watch a clean network idle until the deadline, and a fast recovery does not lose points just because the run is shorter. Partial service stays partial credit. Early defeat earns no credit for the remaining ticks and no final recovery points.
 
 Those are the defaults. A mission can publish different windows, thresholds, and required pairs. By default, every workstation needs every server.
 

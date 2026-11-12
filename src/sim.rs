@@ -418,7 +418,7 @@ impl Core {
         self.jobs.insert(j.id,j);
     }
     pub fn barrier(&mut self)->Result<(),String> {
-        if self.score.as_ref().is_some_and(|s|s.defeated_at.is_some()) || (self.score.is_some() && self.config.tick_limit.is_some_and(|h|self.tick>=h)) {return Err("INVALID_ARGUMENT: scored match is finished".into());}
+        if self.score.as_ref().is_some_and(|s|s.defeated_at.is_some() || s.verified_at.is_some()) || (self.score.is_some() && self.config.tick_limit.is_some_and(|h|self.tick>=h)) {return Err("INVALID_ARGUMENT: scored match is finished".into());}
         self.tick=self.tick.checked_add(1).ok_or_else(||err("LIMIT_EXCEEDED"))?;
         let mut running:Vec<_>=self.jobs.values().filter(|j|j.state=="RUNNING").map(|j|(j.router_id,j.local_sequence,j.id)).collect();
         running.sort();
