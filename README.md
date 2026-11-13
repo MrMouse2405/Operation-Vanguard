@@ -58,7 +58,8 @@ URL is printed on startup. The process binds to loopback by default.
   leader and optional debug-reconstruction exercises.
 - `vanguard/networks/`: tutorial/three-LAN topologies and an explicit TOML generator.
 - [`progressive/`](progressive/README.md): ten complete networks from 10 to 10,000
-  total nodes, with 1–40 LANs, increasing infection pressure and a 500-node/LAN cap.
+  total nodes plus a 100,000-node / 400-LAN extension, with a 500-node/LAN cap.
+  Includes a containment-first reference agent verified to win all eleven fixtures.
 
 The entrypoint's parent is its controlled script root. `require('team')` uses
 staged `team.lua`; all Lua dependencies are staged consistently before startup.

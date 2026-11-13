@@ -438,3 +438,33 @@ Sections below retain prior verification history.
 - Evidence: ignored `.impeccable/review/incremental-controlled-results.json`,
   `incremental-after-{replay,control}.json`, and Chromium `topology-labels-*.png`
   captures under `ui/test-results/`.
+# Progressive containment defender and 100k extension (2026-11-13)
+
+- Added self-contained `progressive/containment-defender.lua`, using only the
+  normal Lua API and discovered local membership/traffic/health results. It
+  quarantines suspects before diagnosis, prioritizes clean-host releases, limits
+  concurrent restores to three, and patrols for same-LAN/history blind spots.
+- Full terminal runs win all eleven published progressive fixtures. Levels 01–11
+  finish at T40, T49, T42, T45, T59, T72, T56, T78, T87, T96, T99; corresponding
+  scores are 977.96, 996.29, 996.31, 997.46, 998.31, 997.71, 998.49, 997.89,
+  997.87, 997.89, 997.68. Every final state has 100% working required service,
+  zero compromised/exposed hosts and zero summed per-agent runtime errors.
+- Repeating level 10 matches all 97 per-tick replay hashes. Compact, source- and
+  network-hashed evidence is checked in as `progressive/validation-results.json`;
+  `progressive/verify.py` reproduces terminal verification and returns failure on
+  non-victory, partial/incomplete coverage or aggregate agent errors.
+- New level 11: 400 routers, 98,800 workstations and 800 servers = 100,000 total
+  nodes, across four sites; 414 links, 2,400 initial infections, 296,400 required
+  pairs, largest LAN 451 total nodes, seed 20272079 and deadline 720. Mission and
+  resource defaults are unchanged. Independent count/uniqueness/connectivity/
+  service-reference/LAN-cap checks and release `--print-config` passed.
+- Generator reproduces level 11 byte-for-byte; all original ten fixtures remain
+  byte-identical. Network SHA256:
+  `53c32ab0840bf7721ab4ffafbb4b424a28e1d5b354e59f51ef90f64766b44d92`.
+- The 100k replay run took about 266 seconds and peaked at 8,104,208 KiB simulator
+  RSS on this machine, including full replay hashing/final snapshot output.
+  This is not a plain-headless or frontend benchmark. Final state hash:
+  `b85ad229a97db20ced5f28851ee05f44194b3bca69dd2539672babd09e724b24`.
+- Raw evidence remains under ignored
+  `.impeccable/review/containment-validation/`; no engine/scoring changes were used
+  to obtain the victories.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce ten explicit progressive Vanguard networks (Python standard library)."""
+"""Reproduce progressive Vanguard networks, including the 100k extension."""
 from pathlib import Path
 import random
 
@@ -15,6 +15,7 @@ LEVELS = [
     (5000, 24, 96, 540),
     (7500, 32, 160, 600),
     (10000, 40, 240, 660),
+    (100000, 400, 2400, 720),
 ]
 
 
@@ -41,7 +42,10 @@ def generate(level, total, count, infected_count, deadline):
     for size in sizes:
         hosts.append(sorted(ids[cursor:cursor + size]))
         cursor += size
-    servers = [[200003 + (i * servers_per_lan + j) * 11
+    # Preserve the original ten fixtures byte-for-byte. The extension's much
+    # larger workstation ID range needs a separate, non-overlapping server band.
+    server_base = 2000003 if total >= 100000 else 200003
+    servers = [[server_base + (i * servers_per_lan + j) * 11
                 for j in range(servers_per_lan)] for i in range(count)]
 
     # Distribute incidents, then add simultaneous sources on harder levels.
