@@ -113,6 +113,16 @@ ticks and are unrelated to instruction fuel.
 
 ## Determinism and topology
 
+- Static topology builds sorted-neighbour BFS parent tables once (O(R²) storage).
+  Route queries preserve the original directional shortest-path tie breaks. Filter,
+  isolation and power checks stay live; blocked paths never silently reroute.
+- Hosts are indexed by router; running tasks by router; mutation locks by target;
+  exposure by target. Completed jobs stay queryable without participating in slot,
+  lock or barrier-running-job scans. Indexes are derived state, not replay content.
+- Attack candidate enumeration occurs only when a source has a vacant attack slot.
+  Active targets are grouped by source; sorted target order and PRNG consumption
+  remain unchanged. Service sets of at least 8,192 pairs evaluate in up to eight
+  independent read-only chunks, joined in source order before integer accounting.
 - Parallel router VMs in fixed, sorted cohorts of eight and a shared barrier.
   Lua instruction execution overlaps on worker threads; shared-effect native calls
   and scheduler writes take deterministic round-robin turns. Read-only calls see
@@ -181,8 +191,23 @@ are part of the supported sandbox, not alternate Vanguard API signatures.
 - Subscribe-before-snapshot with a sequence watermark closes the connection
   race. A lagged socket gets a fresh projection. Clients resync on sequence gaps
   and ignore stale-run updates. Disconnect does not change engine state.
-- The last 512 request IDs are idempotently cached for this server process,
-  including across restart. IDs must not be reused for different commands.
+- Up to 512 request IDs are idempotently cached for this server process, including
+  across restart, within a 16 MiB serialized-reply budget. The newest reply is
+  retained even if it alone exceeds that budget. IDs must not be reused for
+  different commands; older entries may be evicted as either bound is reached.
+- Continuous playback publishes projections at most 10 Hz, independently of tick
+  pacing. Control replies, terminal transitions and explicit snapshot commands are
+  immediate. Socket history holds eight serialized envelopes shared across clients;
+  lagged clients resynchronize rather than retaining an unbounded backlog.
+- The browser reduces every wire sequence into an immutable canonical projection,
+  coalescing live paints to 100 ms. Normalization reuses unchanged arrays; snapshots
+  are not deeply proxied. Outcome/control changes and acknowledgements flush
+  immediately. Local search, selection, scrolling and resizing remain interactive.
+- Closed dialogs mount no body content. JSON children mount only when expanded,
+  with 100 entries/page. Jobs and inspector connections show 100 records/page;
+  observations show 50/page. All records remain accessible through pagination.
+  LAN matching uses maps/sets instead of repeated linear membership searches.
+  Graph icons are cached and unchanged element data/positions are preserved.
 - Pause is serialized by the simulation owner after any in-flight barrier.
   There is no stepping while paused. Resume keeps the same VMs. Restart stages
   configuration and all allowed Lua files before swapping in fresh VMs and a new

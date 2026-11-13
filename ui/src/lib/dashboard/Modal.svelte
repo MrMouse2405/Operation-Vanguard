@@ -13,5 +13,5 @@
 </script>
 <dialog bind:this={dialog} class="dash-dialog cut-surface cut-card" aria-labelledby={titleId} oncancel={close} onclose={() => { open = false; previous?.focus(); }}>
 	<header><h2 id={titleId}>{title}</h2><button class="dash-button" onclick={close}>Close</button></header>
-	<div class="dialog-body">{@render children()}</div>
+	<div class="dialog-body">{#if open}{@render children()}{/if}</div>
 </dialog>

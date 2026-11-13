@@ -2,6 +2,54 @@
 
 ## Executed checks
 
+### Large-network engine and dashboard optimization — 2026-11-12
+
+- Cached static sorted-neighbour BFS trees with O(R²) parent storage. Live endpoint
+  power/isolation/filters and transit policies still decide permission; cached
+  routes do not reroute around blocked paths. Indexed LAN hosts, running jobs,
+  mutation locks and active exposure; skipped attack-candidate enumeration when a
+  source already has its slots filled. Large required-service sets evaluate in
+  ordered, read-only parallel chunks before the usual integer score accounting.
+- `VANGUARD_SKIP_UI_BUILD=1 cargo test --quiet`: **51 passed**, including a reference
+  BFS comparison, live-policy checks, job-index lifecycle, parallel/serial service
+  flag equivalence and first-boundary publication during slow playback.
+- Release replay compatibility: all **46 hashes** match the previous parallel
+  engine on the final fixture's T45 / 999.91 control victory; all **21 hashes**
+  match on a 20-tick uncontrolled outbreak on progressive level 10. No Lua errors.
+- Same-machine five-tick headless benchmark, including replay hashing/writing,
+  `ostrich.lua` on progressive level 10 (10,000 nodes, 240 initial infections):
+  **33.835 s before → 1.376 s after (~24.6×)**. Hashes match at every boundary.
+  This is a fixture-specific measurement, not a universal speedup claim. The
+  optimized control's complete scored replay takes 7.01 s in the recorded run.
+- On the real final-test network, Chromium 1440×1000 initial overview:
+  **4,322.6 ms → 285.2 ms**, **936,228 → 1,422 DOM elements**, and sampled JS heap
+  **1,378,581,084 → 13,885,036 bytes**. Host search takes 23.1 ms in the optimized
+  capture. Controls, LAN selection, inspector and live playback produce no browser
+  errors. Desktop overview retains its previous visual hierarchy.
+- Fixed the dominant hidden-DOM cost: closed dialogs now mount no body; JSON
+  descendants mount on expansion, 100 entries/page. Jobs/connections paginate at
+  100; observations at 50. Indexed matching replaces quadratic LAN membership
+  scans. Raw immutable snapshots and cached normalization avoid deep proxying and
+  rebuilding unchanged arrays. Graph icons/data updates are reused; selecting an
+  existing-page node no longer resets the viewport.
+- Simulation barriers remain authoritative. Automatic projections publish at
+  most 10 Hz; slow-paced first boundaries, control replies and outcomes publish
+  promptly. The client reduces every sequence, coalescing only paints. Serialized
+  socket history is bounded to eight shared envelopes; idempotent replies have a
+  16 MiB serialized budget (newest oversized reply retained).
+- **11 Chromium tests passed**, including a new 10,000-node fixture with full
+  scenario/service arrays and 10,000 historical jobs. It verifies bounded hidden
+  DOM, JSON/job/connection pagination, search, topology, 50-update burst reduction
+  without false resynchronization or resetting the current job/connection page,
+  and phone overflow behavior. The final strengthened performance regression
+  was rerun successfully. Svelte check: **0 errors,
+  0 warnings**. `cargo build --release --locked` passed. Mechanical UI detector:
+  `[]`. Desktop and 390px phone captures were visually reviewed; the resizable
+  phone inspector now scrolls within its bounds rather than spilling past footer.
+- Evidence stays ignored under `.impeccable/review/`: `optimization-*-results.json`,
+  before/after replay files and `dashboard-large-*-after.png`; the checked-in
+  performance regression lives in `ui/tests/performance.spec.ts`.
+
 ### Parallel Lua router VMs — 2026-11-12
 
 - Enabled mlua's `send` support and moved VM execution onto bounded worker threads

@@ -78,7 +78,15 @@ impl Score {
     pub fn observe(&mut self, core:&Core) {
         if self.defeated_at.is_some() || self.verified_at.is_some() { return; }
         let mission=core.config.mission.as_ref().unwrap();
-        self.working=mission.services.iter().map(|s|!core.nodes[&s.client].compromised && !core.nodes[&s.server].compromised && core.traffic_allowed(s.client,s.server)).collect();
+        let working=|s:&Service|!core.nodes[&s.client].compromised && !core.nodes[&s.server].compromised && core.traffic_allowed(s.client,s.server);
+        self.working=if mission.services.len()>=8192 {
+            // Independent reads of one committed boundary; join in source order
+            // before performing integer score accounting or changing the world.
+            std::thread::scope(|scope|{
+                let workers=mission.services.chunks(mission.services.len().div_ceil(8)).map(|services|scope.spawn(||services.iter().map(working).collect::<Vec<_>>())).collect::<Vec<_>>();
+                workers.into_iter().flat_map(|worker|worker.join().expect("service evaluation worker panicked")).collect()
+            })
+        }else{mission.services.iter().map(working).collect()};
         let total:u64=mission.services.iter().map(|s|s.weight).sum();
         let served:u64=mission.services.iter().zip(&self.working).filter(|(_,ok)|**ok).map(|(s,_)|s.weight).sum();
         let mut blocked_hosts=std::collections::BTreeSet::new();
@@ -130,6 +138,20 @@ impl Score {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parallel_service_evaluation_matches_serial_flags_and_accounting(){
+        let mut config=Config{router_count:2,hosts_per_lan:64,server_count:64,initial_compromised:Some(vec![]),tick_limit:Some(100),..Config::default()};
+        let mut mission=Mission::default();mission.expand(&config);assert_eq!(mission.services.len(),8192);config.mission=Some(mission);
+        let mut core=Core::new(config).unwrap();
+        for tick in 0..4{
+            core.nodes.get_mut(&1).unwrap().isolated=tick%2==0;
+            core.barrier().unwrap();
+            let mission=core.config.mission.as_ref().unwrap();
+            let expected=mission.services.iter().map(|s|!core.nodes[&s.client].compromised&&!core.nodes[&s.server].compromised&&core.traffic_allowed(s.client,s.server)).collect::<Vec<_>>();
+            let score=core.score.as_ref().unwrap();assert_eq!(score.working,expected);
+            assert_eq!(score.service_ppm,fraction(expected.iter().filter(|ok|**ok).count() as u64,expected.len() as u64));
+        }
+    }
     fn core(horizon:u64)->Core {
         let mut config=crate::network::parse(&format!("version=1\nrouters=[{{id=1}},{{id=2}}]\nlans=[{{id=10,router=1}},{{id=20,router=2}}]\nworkstations=[{{id=1001,lan=10}},{{id=1002,lan=20}}]\nservers=[{{id=2001,lan=20}}]\nconnections=[{{from=1,to=2}}]\n[simulation]\ntick_limit={horizon}\n")).unwrap();
         config.mission.as_mut().unwrap().outage_ticks=3;

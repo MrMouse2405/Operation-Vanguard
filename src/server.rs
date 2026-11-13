@@ -26,12 +26,14 @@ fn tick_delay(seconds_per_tick:f64,elapsed:Duration)->Duration {
     Duration::from_secs_f64(seconds_per_tick).saturating_sub(elapsed)
 }
 enum RequestMessage {Command(Command,oneshot::Sender<Value>),Stop}
+#[derive(Clone,Debug)]
+struct Published {seq:u64,text:Arc<str>}
 #[derive(Clone)]
-pub struct Server {sender:mpsc::Sender<RequestMessage>,snapshot:Arc<RwLock<Value>>,events:broadcast::Sender<Value>}
+pub struct Server {sender:mpsc::Sender<RequestMessage>,snapshot:Arc<RwLock<Value>>,events:broadcast::Sender<Published>}
 
 impl Server {
     pub fn launch(files:RunFiles)->Result<Self,String>{
-        let (sender,receiver)=mpsc::channel();let (events,_)=broadcast::channel(64);
+        let (sender,receiver)=mpsc::channel();let (events,_)=broadcast::channel(8);
         let snapshot=Arc::new(RwLock::new(Value::Null));let shared=snapshot.clone();let output=events.clone();
         let (ready_tx,ready_rx)=mpsc::sync_channel(1);
         thread::Builder::new().name("vanguard-simulation".into()).spawn(move ||{
@@ -40,7 +42,7 @@ impl Server {
             let mut seq=0;
             let mut seconds_per_tick=runtime.core.borrow().config.tick_ms as f64/1000.0;
             let mut next_tick=Instant::now();
-            fn publish(runtime:&Runtime,seconds_per_tick:f64,seq:&mut u64,shared:&RwLock<Value>,events:&broadcast::Sender<Value>){
+            fn publish(runtime:&Runtime,seconds_per_tick:f64,seq:&mut u64,shared:&RwLock<Value>,events:&broadcast::Sender<Published>){
                 *seq+=1;let mut value=runtime.snapshot();value["seq"]=json!(*seq);value["seconds_per_tick"]=json!(seconds_per_tick);
                 let previous=std::mem::replace(&mut *shared.write().unwrap(),value.clone());
                 let envelope=if previous["run_id"]!=value["run_id"]{
@@ -49,10 +51,11 @@ impl Server {
                     let delta:value_delta::Delta=value_delta::between(&previous,&value);
                     json!({"schema_version":1,"run_id":runtime.run_id,"seq":seq,"tick":value["tick"],"type":"update","base_seq":previous["seq"],"delta":delta})
                 };
-                let _=events.send(envelope);
+                let _=events.send(Published{seq:*seq,text:envelope.to_string().into()});
             }
             publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);let _=ready_tx.send(Ok(()));
-            let mut cache=BTreeMap::<String,Value>::new();let mut cache_order=VecDeque::new();
+            let mut last_publish=Instant::now();
+            let mut cache=BTreeMap::<String,Value>::new();let mut cache_order=VecDeque::new();let mut cache_bytes=0;
             loop {
                 let timeout=if runtime.control=="RUNNING" {next_tick.saturating_duration_since(Instant::now())}else{Duration::from_secs(3600)};
                 match receiver.recv_timeout(timeout){
@@ -61,7 +64,11 @@ impl Server {
                         if runtime.control=="RUNNING" {
                             let started=Instant::now();
                             if let Err(error)=runtime.step(){runtime.control="ERROR".into();runtime.core.borrow_mut().emit("runtime_error",None,"<engine>",json!({"error":error,"severity":"error"}));}
-                            publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);
+                            // Rendering is a projection, not the clock. Run every
+                            // barrier, but publish live views at most 10 Hz.
+                            if seconds_per_tick>=0.1 || last_publish.elapsed()>=Duration::from_millis(100) || runtime.control!="RUNNING" {
+                                publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);last_publish=Instant::now();
+                            }
                             next_tick=Instant::now()+tick_delay(seconds_per_tick,started.elapsed());
                         }
                     },
@@ -100,11 +107,14 @@ impl Server {
                             },
                             _=>Err(format!("invalid transition: {} in {}",command.command,runtime.control)),
                         }};
-                        if command.command!="GetSnapshot" {publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);}
+                        if command.command!="GetSnapshot" || runtime.control=="RUNNING" {publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);last_publish=Instant::now();}
                         let value=shared.read().unwrap().clone();
                         let reply=json!({"schema_version":1,"run_id":runtime.run_id,"seq":seq,"tick":value["tick"],"type":if result.is_ok(){if command.command=="GetSnapshot"{"snapshot"}else{"ack"}}else{"error"},"request_id":command.request_id,"command":command.command,"error":result.err(),"snapshot":value});
-                        if cache_order.len()==512 {if let Some(id)=cache_order.pop_front(){cache.remove(&id);}}
-                        cache_order.push_back(command.request_id.clone());cache.insert(command.request_id,reply.clone());let _=response.send(reply);
+                        let bytes=serde_json::to_vec(&reply).unwrap().len();
+                        while !cache_order.is_empty() && (cache_order.len()>=512 || cache_bytes+bytes>16*1024*1024) {
+                            let (id,size)=cache_order.pop_front().unwrap();cache.remove(&id);cache_bytes-=size;
+                        }
+                        cache_bytes+=bytes;cache_order.push_back((command.request_id.clone(),bytes));cache.insert(command.request_id,reply.clone());let _=response.send(reply);
                     }
                 }
             }
@@ -152,9 +162,9 @@ pub fn websocket(_origin:LocalOrigin,ws:rocket_ws::WebSocket,server:&State<Serve
         stream.send(rocket_ws::Message::Text(json!({"schema_version":1,"run_id":snapshot["run_id"],"seq":watermark,"tick":snapshot["tick"],"type":"snapshot","snapshot":snapshot}).to_string())).await?;
         loop {rocket::tokio::select!{
             update=updates.recv()=>{
-                let value=match update{Ok(value)=>value,Err(broadcast::error::RecvError::Lagged(_))=>{let s=server.snapshot();json!({"schema_version":1,"run_id":s["run_id"],"seq":s["seq"],"tick":s["tick"],"type":"snapshot","snapshot":s})},Err(_)=>break};
-                let seq=value["seq"].as_u64().unwrap_or(0);if seq<=watermark{continue;}watermark=seq;
-                stream.send(rocket_ws::Message::Text(value.to_string())).await?;
+                let value=match update{Ok(value)=>value,Err(broadcast::error::RecvError::Lagged(_))=>{let s=server.snapshot();Published{seq:s["seq"].as_u64().unwrap_or(0),text:json!({"schema_version":1,"run_id":s["run_id"],"seq":s["seq"],"tick":s["tick"],"type":"snapshot","snapshot":s}).to_string().into()}},Err(_)=>break};
+                if value.seq<=watermark{continue;}watermark=value.seq;
+                stream.send(rocket_ws::Message::Text(value.text.to_string())).await?;
             },
             incoming=stream.next()=>{match incoming{
                 Some(Ok(rocket_ws::Message::Text(text)))=>{
@@ -189,6 +199,7 @@ mod tests {
         let deadline=Instant::now()+Duration::from_secs(2);
         while server.snapshot()["tick"]==0 {assert!(Instant::now()<deadline);rocket::tokio::time::sleep(Duration::from_millis(5)).await;}
         let tick=server.snapshot()["tick"].clone();
+        assert_eq!(tick,1,"slow playback must publish its first boundary before waiting for the next tick");
         rocket::tokio::time::sleep(Duration::from_millis(80)).await;
         assert_eq!(server.snapshot()["tick"],tick);
         let before=Instant::now();server.command(cmd("pause-paced","Pause")).await;

@@ -9,7 +9,14 @@
 	let ready = $state(false);
 	let viewport = $state({width:0,height:0});
 	let signature = '';
-	const icon = (type: string, color: string) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="${color}" stroke-width="1.8">${type === 'SERVER' ? '<rect x="5" y="3" width="22" height="26" rx="3"/><path d="M10 10h12M10 16h12M10 22h8"/>' : '<rect x="5" y="5" width="22" height="16" rx="2"/><path d="M16 21v6M9 27h14"/>'}</svg>`);
+	const dataSignatures = new Map<string,string>();
+	const icons = new Map<string,string>();
+	let renderedIds = $derived(new Set(snapshot?.nodes.map(n=>n.id)??[]));
+	const icon = (type: string, color: string) => {
+		const key=`${type}:${color}`;let value=icons.get(key);
+		if(!value){value='data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="${color}" stroke-width="1.8">${type === 'SERVER' ? '<rect x="5" y="3" width="22" height="26" rx="3"/><path d="M10 10h12M10 16h12M10 22h8"/>' : '<rect x="5" y="5" width="22" height="16" rx="2"/><path d="M16 21v6M9 27h14"/>'}</svg>`);icons.set(key,value);}
+		return value;
+	};
 	onMount(() => {
 		let disposed = false;
 		let resize: ResizeObserver;
@@ -49,18 +56,19 @@
 				const color = n.compromised ? '#ff6c78' : n.exposure != null ? '#ffbf69' : '#50e3b1';
 				const offset = i-1;
 				const position = i===0 ? center : { x: originX+40+(offset%columns)*72, y: originY+90+Math.floor(offset/columns)*64 };
-				elements.push({ data: { ...n, id: String(n.id), parent: `lan-${router.id}`, label: `${n.compromised?'! ':n.exposure?'? ':''}${n.type==='ROUTER'?'R':n.type==='SERVER'?'SRV-':'WS-'}${n.id}${n.isolated?' [ISO]':''}${n.power!=='ONLINE'?` [${n.power}]`:''}`, icon: icon(n.type,color), isolated: n.isolated?1:0, unavailable: n.power!=='ONLINE'?1:0 }, position });
+				elements.push({ data: { type:n.type, id: String(n.id), parent: `lan-${router.id}`, label: `${n.compromised?'! ':n.exposure?'? ':''}${n.type==='ROUTER'?'R':n.type==='SERVER'?'SRV-':'WS-'}${n.id}${n.isolated?' [ISO]':''}${n.power!=='ONLINE'?` [${n.power}]`:''}`, icon: icon(n.type,color), isolated: n.isolated?1:0, unavailable: n.power!=='ONLINE'?1:0 }, position });
 			}
 			offset+=narrow?150+Math.ceil((members.length-1)/columns)*64:Math.max(180,columns*72+80);
 		}
 		// LAN fabric implies attachment; avoid drawing a fan of redundant host edges.
-		for (const s of snapshot.sessions) if(snapshot.nodes.some(n=>n.id===s.source)&&snapshot.nodes.some(n=>n.id===s.target)) elements.push({ data: { id:`session-${s.id}`,source:String(s.source),target:String(s.target) },classes:'session' });
-		const next = `${viewport.width}:${viewport.height}:${selected}:${snapshot.nodes.map(n=>n.id).join(',')}`;
+		for (const s of snapshot.sessions) if(renderedIds.has(s.source)&&renderedIds.has(s.target)) elements.push({ data: { id:`session-${s.id}`,source:String(s.source),target:String(s.target) },classes:'session' });
+		const next = `${viewport.width}:${viewport.height}:${snapshot.nodes.map(n=>n.id).join(',')}`;
 		cy.batch(() => {
 			const ids = new Set(elements.map(e => e.data.id)); cy!.elements().filter(e => !ids.has(e.id())).remove();
-			for (const e of elements) {const existing=cy!.getElementById(e.data.id!);if(existing.length){existing.data(e.data);if(next!==signature&&e.position)existing.position(e.position);}else cy!.add(e);}
+			for(const id of dataSignatures.keys())if(!ids.has(id))dataSignatures.delete(id);
+			for (const e of elements) {const id=e.data.id!;const existing=cy!.getElementById(id);const dataSignature=JSON.stringify(e.data);if(existing.length){if(dataSignatures.get(id)!==dataSignature)existing.data(e.data);if(next!==signature&&e.position)existing.position(e.position);}else cy!.add(e);dataSignatures.set(id,dataSignature);}
 			cy!.nodes().not('.lan').style('font-size',narrow?13:10);
-			cy!.nodes().unselect();if(selected!==null)cy!.getElementById(String(selected)).select();
+			cy!.$(':selected').filter(n=>n.id()!==String(selected)).unselect();if(selected!==null)cy!.getElementById(String(selected)).select();
 		});
 		if(next!==signature){signature=next;fit();}
 	});
@@ -76,6 +84,6 @@
 	function zoom(factor:number) { if(cy)cy.zoom({level:cy.zoom()*factor,renderedPosition:{x:cy.width()/2,y:cy.height()/2}}); }
 </script>
 <div class="map-bar"><h2>CONNECTIONS</h2><span class="pill">{snapshot?.nodes.filter(n=>n.type!=='ROUTER').length??0} HOSTS</span><span class="connection-count">{snapshot?.sessions.length??0} active</span></div>
-<p class="map-hint">{selected===null?'Select a host to see its connections':'Selected host and its connected peers'} · Drag to pan · Scroll to zoom{#if snapshot?.sessions.some(s=>!snapshot.nodes.some(n=>n.id===s.source)||!snapshot.nodes.some(n=>n.id===s.target))} · More peers listed in inspector{/if}</p>
+<p class="map-hint">{selected===null?'Select a host to see its connections':'Selected host and its connected peers'} · Drag to pan · Scroll to zoom{#if snapshot?.sessions.some(s=>!renderedIds.has(s.source)||!renderedIds.has(s.target))} · More peers listed in inspector{/if}</p>
 <div class="cytoscape" bind:this={container} aria-label="Live LAN topology. Use Node table for keyboard-accessible host navigation." role="img"></div>
 <div class="map-footer"><div class="graph-legend"><span><i class="green-dot"></i>Healthy</span><span><i class="amber-dot"></i>In danger [?]</span><span><i class="red-dot"></i>Compromised [!]</span><span><Network size={12}/> Immune router</span><span>[ISO] Isolated · dim: unavailable</span><span>Arrows show live connections · LAN attachment implied</span></div><div class="map-controls"><button aria-label="Zoom out" onclick={()=>zoom(.8)}><Minus size={14}/></button><button aria-label="Zoom in" onclick={()=>zoom(1.25)}><Plus size={14}/></button><button aria-label="Fit topology" onclick={fit}><Focus size={14}/> Fit</button></div></div>

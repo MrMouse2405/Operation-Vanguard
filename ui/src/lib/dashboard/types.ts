@@ -15,15 +15,23 @@ export interface Snapshot {
 }
 export interface Envelope { schema_version: number; run_id: string; seq: number; tick: number; type: string; request_id?: string; snapshot?: unknown; delta?: Partial<Snapshot>; base_seq?: number; error?: unknown }
 export type Command = 'Start' | 'Pause' | 'Resume' | 'Restart' | 'GetSnapshot' | 'StepTicks' | 'SetTickPacing';
+const normalizedNodes = new WeakMap<any[], Node[]>();
+const normalizedAgents = new WeakMap<any[], Agent[]>();
+const normalizedEvents = new WeakMap<any[], RuntimeEvent[]>();
+function cachedList<T>(values:any[], cache:WeakMap<any[],T[]>, normalize:(value:any,index:number)=>T):T[] {
+	let result=cache.get(values);
+	if(!result){result=values.map(normalize);cache.set(values,result);}
+	return result;
+}
 export function normalizeSnapshot(value: any): Snapshot {
 	if (!value || typeof value !== 'object' || !Array.isArray(value.nodes) || !value.run_id) throw new Error('Invalid runtime snapshot. Reconnect to request a fresh snapshot.');
 	const list = (v: any): any[] => Array.isArray(v) ? v : [];
 	return { ...value, schema_version: value.schema_version ?? 1, seq: Number(value.seq ?? 0), tick: Number(value.tick ?? 0),
 		control: String(value.control ?? value.state ?? 'READY').toUpperCase(), scenario: value.scenario ?? {}, score: value.score ?? {enabled:false,outcome:'PRACTICE'},
-		nodes: list(value.nodes).map(n => ({ ...n, type: String(n.type ?? n.node_type ?? 'UNKNOWN').toUpperCase(), shield: n.shield ?? { policy: n.policy, exceptions: n.exceptions, isolated: n.isolated } })),
+		nodes: cachedList(list(value.nodes), normalizedNodes, n => ({ ...n, type: String(n.type ?? n.node_type ?? 'UNKNOWN').toUpperCase(), shield: n.shield ?? { policy: n.policy, exceptions: n.exceptions, isolated: n.isolated } })),
 		links: list(value.links), sessions: list(value.sessions), jobs: list(value.jobs),
-		agents: list(value.agents).map(a => ({ ...a, known: list(a.known), observations: list(a.observations) })),
-		events: list(value.events).map((e, index) => ({ ...e, seq: e.seq ?? e.sequence ?? index, kind: String(e.kind ?? 'unknown').toLowerCase(), source: String(e.source ?? `agent:${e.agent_id ?? 'runtime'}`), data: e.data ?? {} })),
+		agents: cachedList(list(value.agents), normalizedAgents, a => ({ ...a, known: list(a.known), observations: list(a.observations) })),
+		events: cachedList(list(value.events), normalizedEvents, (e, index) => ({ ...e, seq: e.seq ?? e.sequence ?? index, kind: String(e.kind ?? 'unknown').toLowerCase(), source: String(e.source ?? `agent:${e.agent_id ?? 'runtime'}`), data: e.data ?? {} })),
 		topics: list(value.topics), enemy_updates: value.enemy_updates ?? 0, history: { first_seq: value.history?.first_seq ?? 0, evicted: value.history?.evicted ?? 0 } };
 }
 export function sourceColor(source: string): string {

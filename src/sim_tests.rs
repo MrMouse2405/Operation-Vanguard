@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn cached_routes_match_sorted_bfs_and_filters_remain_live(){
+    let c=Core::new(Config{router_count:6,hosts_per_lan:2,server_count:0,router_edges:Some(vec![[1,2],[1,3],[2,4],[3,4],[4,5],[3,6],[5,6]]),initial_compromised:Some(vec![]),..Config::default()}).unwrap();
+    fn reference(c:&Core,source:u64,target:u64)->Option<Vec<u64>>{
+        let a=&c.nodes[&source];let b=&c.nodes[&target];
+        if a.kind=="ROUTER"||b.kind=="ROUTER"{return None;}
+        if a.router_id==b.router_id{return Some(vec![]);}
+        let mut queue=VecDeque::from([a.router_id]);let mut parents=BTreeMap::from([(a.router_id,a.router_id)]);
+        while let Some(router)=queue.pop_front(){
+            if router==b.router_id{
+                let mut path=vec![router];let mut cursor=router;
+                while cursor!=a.router_id{cursor=parents[&cursor];path.push(cursor);}
+                path.reverse();return Some(path);
+            }
+            let peers:BTreeSet<_>=c.edges.iter().filter_map(|&(a,b)|if a==router{Some(b)}else if b==router{Some(a)}else{None}).collect();
+            for peer in peers{if let std::collections::btree_map::Entry::Vacant(entry)=parents.entry(peer){entry.insert(router);queue.push_back(peer);}}
+        }
+        None
+    }
+    for source in c.nodes.keys(){for target in c.nodes.keys(){assert_eq!(c.route(*source,*target),reference(&c,*source,*target));}}
+    let mut c=c;let original=c.route(1001,1007).unwrap();assert_eq!(original,vec![1,2,4]);
+    assert!(c.traffic_allowed(1001,1007));
+    c.nodes.get_mut(&2).unwrap().isolated=true;
+    assert!(!c.traffic_allowed(1001,1007));assert_eq!(c.route(1001,1007),Some(original));
+    c.nodes.get_mut(&2).unwrap().isolated=false;assert!(c.traffic_allowed(1001,1007));
+    c.nodes.get_mut(&1007).unwrap().power="OFFLINE".into();assert!(!c.traffic_allowed(1001,1007));
+}
+
+#[test]
+fn job_indexes_track_completion_failure_and_archived_jobs(){
+    let mut c=small();discover(&mut c);
+    for _ in 0..30{
+        let job=submit(&mut c,101,json!({"action":"HOST_SCAN","target":1001}));
+        assert!(c.running_by_router[&1].contains(&job));advance(&mut c,3);
+        assert!(c.running_by_router[&1].is_empty());
+    }
+    let shutdown=submit(&mut c,101,json!({"action":"SHUTDOWN","target":1001}));
+    assert_eq!(c.mutation_locks[&1001],shutdown);advance(&mut c,1);assert!(!c.mutation_locks.contains_key(&1001));
+    let scan=submit(&mut c,101,json!({"action":"SHIELD_STATUS","target":1001}));advance(&mut c,1);
+    assert_eq!(c.jobs[&scan].state,"COMPLETED");assert_eq!(c.api_read(101,"slots",json!([])).unwrap()["available"],5);
+    assert_eq!(c.api_read(101,"tasks",json!([])).unwrap(),json!([]));
+    let startup=submit(&mut c,101,json!({"action":"STARTUP","target":1001}));advance(&mut c,3);
+    assert!(!c.mutation_locks.contains_key(&1001));assert_eq!(c.jobs[&startup].state,"COMPLETED");
+}
+
+#[test]
 fn attacks_have_exclusive_targets_and_incoming_sessions_close_on_infection(){
     let mut c=Core::new(Config{router_count:1,hosts_per_lan:8,server_count:0,initial_compromised:Some(vec![1001,1002]),..Config::default()}).unwrap();
     c.barrier().unwrap();

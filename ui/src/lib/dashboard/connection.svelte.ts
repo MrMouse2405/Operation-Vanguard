@@ -1,7 +1,10 @@
 import { normalizeSnapshot, type Snapshot, type Envelope, type Command } from './types';
 
 export function createConnection() {
-	let snapshot = $state<Snapshot | null>(null);
+	// Snapshots are immutable projections, not millions of deeply reactive fields.
+	let snapshot = $state.raw<Snapshot | null>(null);
+	let canonical: any = null;
+	let renderTimer: ReturnType<typeof setTimeout> | undefined;
 	let status = $state('Connecting');
 	let error = $state('');
 	let pending = $state<Command | null>(null);
@@ -15,23 +18,35 @@ export function createConnection() {
 	let fallback = false;
 	let syncing = false;
 	const retired = new Set<string>();
+	function publish() {
+		clearTimeout(renderTimer); renderTimer = undefined;
+		if (!canonical || stopped) return;
+		snapshot = normalizeSnapshot(canonical);
+		status = fallback ? 'HTTP connected' : 'Live';
+	}
 	function receive(envelope: Envelope) {
 		if (envelope.schema_version !== 1) { error = 'Unsupported runtime schema. Reload after updating Vanguard.'; return; }
 		if (envelope.request_id === request && (envelope.type === 'ack' || envelope.type === 'error')) { pending = null; clearTimeout(timeout); }
 		if (envelope.type === 'error') { error = typeof envelope.error === 'string' ? envelope.error : JSON.stringify(envelope.error ?? 'Command failed'); return; }
 		if (!envelope.snapshot && !envelope.delta) return;
 		if (retired.has(envelope.run_id) && envelope.type !== 'snapshot') return;
-		if (snapshot && envelope.run_id !== snapshot.run_id && envelope.type !== 'snapshot') { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
-		if (snapshot && envelope.run_id === snapshot.run_id) {
-			if (envelope.seq < snapshot.seq || (envelope.seq === snapshot.seq && envelope.type !== 'snapshot')) return;
-			if (envelope.type === 'update' && envelope.seq > snapshot.seq + 1) { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
+		if (canonical && envelope.run_id !== canonical.run_id && envelope.type !== 'snapshot') { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
+		if (canonical && envelope.run_id === canonical.run_id) {
+			if (envelope.seq < canonical.seq) return;
+			if (envelope.seq === canonical.seq && envelope.type !== 'snapshot') { if(envelope.type === 'ack') publish(); return; }
+			if (envelope.type === 'update' && envelope.seq > canonical.seq + 1) { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
 		}
 		try {
-			if (envelope.delta && (!snapshot || envelope.base_seq !== snapshot.seq)) { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
-			const next = normalizeSnapshot(envelope.snapshot ?? { ...snapshot, ...envelope.delta });
-			if (snapshot && snapshot.run_id !== next.run_id) retired.add(snapshot.run_id);
+			if (envelope.delta && (!canonical || envelope.base_seq !== canonical.seq)) { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
+			const next: any = envelope.snapshot ?? { ...canonical, ...envelope.delta };
+			if (!Array.isArray(next.nodes) || !next.run_id) throw new Error('Invalid runtime snapshot. Reconnect to request a fresh snapshot.');
+			if (canonical && canonical.run_id !== next.run_id) retired.add(canonical.run_id);
 			retired.delete(next.run_id);
-			snapshot = next; syncing = false; status = fallback ? 'HTTP connected' : 'Live';
+			canonical = next; syncing = false;
+			// Reduce every wire delta in sequence, but paint only the newest state.
+			// Commands/restarts/full snapshots are visible immediately.
+			if (envelope.type !== 'update' || !snapshot || next.control !== snapshot.control) publish();
+			else if (!renderTimer) renderTimer = setTimeout(publish, 100);
 		} catch (cause) { error = String(cause); }
 	}
 	async function getSnapshot() {
@@ -62,6 +77,6 @@ export function createConnection() {
 		socket.onclose = () => { if (stopped) return; status = 'Reconnecting'; pending = null; clearTimeout(timeout); reconnect = setTimeout(connect, Math.min(15000, 500 * 2 ** attempt++)); };
 		socket.onerror = () => { error = 'Connection interrupted; reconnecting automatically.'; };
 	}
-	function destroy() { stopped = true; clearTimeout(reconnect); clearTimeout(timeout); clearInterval(poll); socket?.close(); }
+	function destroy() { stopped = true; clearTimeout(renderTimer); clearTimeout(reconnect); clearTimeout(timeout); clearInterval(poll); socket?.close(); canonical = null; }
 	return { get snapshot() { return snapshot; }, get status() { return status; }, get error() { return error; }, get pending() { return pending; }, send, connect, destroy };
 }

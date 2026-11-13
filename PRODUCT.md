@@ -72,5 +72,10 @@ The dashboard opens on aggregate LAN health and drills into a Connections graph.
 Selecting sidebar hosts locates them on the graph. Detail is bounded to 80 matching
 hosts plus up to 80 additional connection endpoints, including peers outside the
 active LAN or filters; the inspector retains every relevant connection record.
+Large-network performance uses lazy, paginated JSON inspection and telemetry,
+indexed host/LAN filtering, immutable projections and live paints capped at 10 Hz.
+Every simulation barrier still executes; command and terminal feedback is immediate.
+Jobs/connections have 100-record pages, observations 50-record pages, and expanded
+JSON collections 100-entry pages. Closed dialogs mount no hidden JSON content.
 Seconds/tick sets a minimum total tick duration including computation during
 continuous playback; 0 means full speed.

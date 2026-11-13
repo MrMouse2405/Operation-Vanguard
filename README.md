@@ -106,9 +106,15 @@ file nor simulation settings accept script selection.
 
 The dashboard follows the supplied network-explorer prototype: global search,
 LAN hierarchy, aggregate health map, paginated node table, server inventory,
-right-hand situation/node inspector, and collapsible telemetry dock. LAN detail
+right-hand Match score/node inspector, and collapsible telemetry dock. LAN detail
 renders up to 80 hosts per page; the overview shows aggregates rather than all
 physical edges. The component-gallery route has been removed.
+
+Large-network views use indexed host/LAN lookup, immutable snapshots, lazy JSON
+details and bounded lists. Jobs and connections page in groups of 100; observations
+page in groups of 50, and expanded JSON collections page in groups of 100. Closed
+dialogs do not render their contents. Live projections update at most 10 times per
+second without slowing or skipping simulation ticks; controls publish immediately.
 
 - **Pause** acknowledges a stable barrier; no world/task/message progress follows.
 - **Resume** preserves VMs and world state.

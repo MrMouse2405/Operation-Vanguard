@@ -182,6 +182,34 @@ pub fn action_registry() -> Value {
 fn readonly(a: &str) -> bool { matches!(a,"SCAN"|"TRAFFIC_SCAN"|"HOST_SCAN"|"CONNECTION_SCAN"|"FULL_HOST_SCAN"|"SHIELD_STATUS") }
 fn err(label: &str) -> String { format!("{label}: request rejected") }
 
+/// Static, sorted-neighbour BFS trees. O(R²) storage rather than storing a full
+/// O(R)-length path per router pair. Policies are always checked live.
+struct Routing {
+    routers: Vec<u64>,
+    index: BTreeMap<u64,usize>,
+    parents: Vec<Vec<usize>>,
+    neighbours: BTreeMap<u64,Vec<u64>>,
+}
+impl Routing {
+    fn new(routers:Vec<u64>,edges:&BTreeSet<(u64,u64)>)->Self {
+        let index:BTreeMap<_,_>=routers.iter().enumerate().map(|(i,id)|(*id,i)).collect();
+        let mut neighbours:BTreeMap<_,Vec<_>>=routers.iter().map(|id|(*id,Vec::new())).collect();
+        for &(a,b) in edges {neighbours.get_mut(&a).unwrap().push(b);neighbours.get_mut(&b).unwrap().push(a);}
+        for peers in neighbours.values_mut(){peers.sort_unstable();}
+        let mut parents=vec![vec![usize::MAX;routers.len()];routers.len()];
+        for source in 0..routers.len(){
+            parents[source][source]=source;let mut queue=VecDeque::from([source]);
+            while let Some(current)=queue.pop_front(){
+                for peer in &neighbours[&routers[current]]{
+                    let next=index[peer];
+                    if parents[source][next]==usize::MAX {parents[source][next]=current;queue.push_back(next);}
+                }
+            }
+        }
+        Self{routers,index,parents,neighbours}
+    }
+}
+
 pub struct Core {
     pub score: Option<crate::scoring::Score>,
     pub config: Config, pub tick: u64, pub nodes: BTreeMap<u64,Node>,
@@ -192,6 +220,11 @@ pub struct Core {
     rng: u64, session_sequence: u64, task_sequence:u64,
     pub enemy_updates:u64, pub attack_attempts:u64, pub successful_connections:u64,
     host_attempts:BTreeMap<u64,u64>, host_connections:BTreeMap<u64,u64>,
+    routing:Routing,
+    hosts_by_router:BTreeMap<u64,Vec<u64>>,
+    running_by_router:BTreeMap<u64,BTreeSet<u64>>,
+    mutation_locks:BTreeMap<u64,u64>,
+    exposure_by_target:BTreeMap<u64,u64>,
 }
 impl Core {
     pub fn new(config: Config) -> Result<Self,String> {
@@ -201,7 +234,10 @@ impl Core {
         let initial: BTreeSet<_> = config.initial_ids(&ns).into_iter().collect();
         // Scenario nodes describe topology; all dynamic state starts from the rules.
         for n in &mut ns { let lan=n.lan_id; *n = Node::new(n.id, &n.kind, n.router_id); n.lan_id=lan; n.compromised = initial.contains(&n.id); }
-        let edges = config.edges(&ns).into_iter().map(|[a,b]| (a.min(b),a.max(b))).collect();
+        let edges:BTreeSet<_> = config.edges(&ns).into_iter().map(|[a,b]| (a.min(b),a.max(b))).collect();
+        let routing=Routing::new(ns.iter().filter(|n|n.kind=="ROUTER").map(|n|n.id).collect(),&edges);
+        let mut hosts_by_router=BTreeMap::<_,Vec<_>>::new();
+        for node in ns.iter().filter(|n|n.kind!="ROUTER"){hosts_by_router.entry(node.router_id).or_default().push(node.id);}
         let mut agents = BTreeMap::new();
         for (index, n) in ns.iter().filter(|n| n.kind == "ROUTER").enumerate() {
             let id = 101 + index as u64;
@@ -210,7 +246,7 @@ impl Core {
         let rng = if config.seed == 0 { 0x9e3779b97f4a7c15 } else { config.seed };
         let scored=config.mission.as_ref().is_some_and(|m|m.enabled);
         let mut core=Self {score:None,config,tick:0,nodes:ns.into_iter().map(|n|(n.id,n)).collect(),agents,jobs:BTreeMap::new(),events:VecDeque::new(),sequence:0,
-            sessions:BTreeMap::new(),edges,history:BTreeMap::new(),submissions:BTreeMap::new(),attacks:BTreeMap::new(),rng,session_sequence:0,task_sequence:0,enemy_updates:0,attack_attempts:0,successful_connections:0,host_attempts:BTreeMap::new(),host_connections:BTreeMap::new()};
+            sessions:BTreeMap::new(),edges,history:BTreeMap::new(),submissions:BTreeMap::new(),attacks:BTreeMap::new(),rng,session_sequence:0,task_sequence:0,enemy_updates:0,attack_attempts:0,successful_connections:0,host_attempts:BTreeMap::new(),host_connections:BTreeMap::new(),routing,hosts_by_router,running_by_router:BTreeMap::new(),mutation_locks:BTreeMap::new(),exposure_by_target:BTreeMap::new()};
         if scored {core.score=Some(crate::scoring::Score::new(&core));}
         Ok(core)
     }
@@ -247,8 +283,8 @@ impl Core {
             if !self.nodes.contains_key(&p) { return Err(err("UNKNOWN_NODE")); }
         }
         if admission {
-            if self.jobs.values().filter(|j|j.router_id==state.router_id && j.state=="RUNNING").count() >= 5 { return Err(err("TASK_SLOTS_FULL")); }
-            if !readonly(action) && self.jobs.values().any(|j|j.state=="RUNNING" && !readonly(&j.action) && j.target.unwrap_or(j.router_id)==target.unwrap_or(state.router_id)) { return Err(err("TARGET_BUSY")); }
+            if self.running_by_router.get(&state.router_id).map_or(0,BTreeSet::len) >= 5 { return Err(err("TASK_SLOTS_FULL")); }
+            if !readonly(action) && self.mutation_locks.contains_key(&target.unwrap_or(state.router_id)) { return Err(err("TARGET_BUSY")); }
         }
         Ok((action.into(),target,peer,duration))
     }
@@ -261,6 +297,8 @@ impl Core {
         let seq=self.submissions.entry(router).or_default();*seq+=1;
         self.task_sequence=self.task_sequence.checked_add(1).filter(|v|*v<=9_007_199_254_740_991).ok_or_else(||err("LIMIT_EXCEEDED"))?;
         let id=self.task_sequence;
+        self.running_by_router.entry(router).or_default().insert(id);
+        if !readonly(&action){self.mutation_locks.insert(target.unwrap_or(router),id);}
         let job=Job{id,agent_id:agent,router_id:router,source:String::new(),action,target,peer,state:"RUNNING".into(),started_at:self.tick,finished_at:None,fuel_spent:self.config.task_admission_cost,duration,result:None,failure:None,entered:false,changed:false,local_sequence:*seq};
         self.jobs.insert(id,job);
         self.emit("task_admitted",Some(agent),"core",json!({"task_id":id}));
@@ -284,8 +322,8 @@ impl Core {
                 let a = self.agents.get(&id).ok_or_else(||err("UNKNOWN_AGENT"))?;
                 Ok(json!(if id==agent {a.fuel} else {a.last_fuel}))
             }
-            "slots" => {let n=self.jobs.values().filter(|j|j.router_id==router && j.state=="RUNNING").count(); Ok(json!({"capacity":5,"running":n,"available":5-n}))},
-            "tasks" => Ok(json!(self.jobs.values().filter(|j|j.router_id==router && j.state=="RUNNING").map(|j|j.id).collect::<Vec<_>>())),
+            "slots" => {let n=self.running_by_router.get(&router).map_or(0,BTreeSet::len); Ok(json!({"capacity":5,"running":n,"available":5-n}))},
+            "tasks" => Ok(json!(self.running_by_router.get(&router).map(|ids|ids.iter().copied().collect::<Vec<_>>()).unwrap_or_default())),
             "cost"|"can_deploy" => {
                 let parsed = self.descriptor(agent,first,method!="cost");
                 if method=="can_deploy" { return Ok(match parsed {Ok(_)=>json!([true]),Err(e)=>json!([false,e.split(':').next().unwrap()])}); }
@@ -310,18 +348,24 @@ impl Core {
         let a=self.nodes.get(&source)?; let b=self.nodes.get(&target)?;
         if a.kind=="ROUTER" || b.kind=="ROUTER" {return None;}
         if a.router_id==b.router_id {return Some(vec![]);}
-        let mut q=VecDeque::from([a.router_id]); let mut prev=BTreeMap::from([(a.router_id,a.router_id)]);
-        while let Some(r)=q.pop_front() {
-            if r==b.router_id {let mut path=vec![r]; let mut p=r; while p!=a.router_id {p=prev[&p];path.push(p);} path.reverse();return Some(path);}
-            let neighbours:BTreeSet<_>=self.edges.iter().filter_map(|&(x,y)|if x==r {Some(y)} else if y==r {Some(x)} else {None}).collect();
-            for next in neighbours {if let std::collections::btree_map::Entry::Vacant(e)=prev.entry(next) {e.insert(r);q.push_back(next);}}
-        }
-        None
+        let source=self.routing.index[&a.router_id];let mut current=self.routing.index[&b.router_id];
+        if self.routing.parents[source][current]==usize::MAX{return None;}
+        let mut path=vec![b.router_id];
+        while current!=source {current=self.routing.parents[source][current];path.push(self.routing.routers[current]);}
+        path.reverse();Some(path)
     }
     pub fn traffic_allowed(&self, source: u64, target: u64) -> bool {
         let (Some(a),Some(b))=(self.nodes.get(&source),self.nodes.get(&target)) else {return false;};
-        if source==target || a.power!="ONLINE" || b.power!="ONLINE" || !a.allows(target) || !b.allows(source) {return false;}
-        self.route(source,target).is_some_and(|route|route.iter().all(|r|self.nodes[r].allows(source)&&self.nodes[r].allows(target)))
+        if source==target || a.kind=="ROUTER" || b.kind=="ROUTER" || a.power!="ONLINE" || b.power!="ONLINE" || !a.allows(target) || !b.allows(source) {return false;}
+        if a.router_id==b.router_id{return true;}
+        let start=self.routing.index[&a.router_id];let mut current=self.routing.index[&b.router_id];
+        if self.routing.parents[start][current]==usize::MAX{return false;}
+        loop {
+            let router=&self.nodes[&self.routing.routers[current]];
+            if !router.allows(source)||!router.allows(target){return false;}
+            if current==start{return true;}
+            current=self.routing.parents[start][current];
+        }
     }
     pub fn communicate(&mut self, source:u64,target:u64) -> Option<u64> {
         if !self.traffic_allowed(source,target) {return None;}
@@ -360,13 +404,13 @@ impl Core {
         let mut discovered=BTreeSet::new();
         let data=match j.action.as_str() {
             "SCAN"=>{
-                let hosts:Vec<_>=self.nodes.values().filter(|n|n.router_id==j.router_id&&n.kind!="ROUTER").map(|n|{discovered.insert(n.id);json!({"id":n.id,"type":n.kind})}).collect();
-                let routers:BTreeSet<_>=self.edges.iter().filter_map(|&(a,b)|if a==j.router_id {Some(b)}else if b==j.router_id {Some(a)}else{None}).collect();
+                let hosts:Vec<_>=self.hosts_by_router.get(&j.router_id).into_iter().flatten().map(|id|{let n=&self.nodes[id];discovered.insert(n.id);json!({"id":n.id,"type":n.kind})}).collect();
+                let routers:BTreeSet<_>=self.routing.neighbours[&j.router_id].iter().copied().collect();
                 discovered.extend(&routers);json!({"hosts":hosts,"routers":routers})
             }
             "TRAFFIC_SCAN"=>{let pairs:Vec<_>=self.history.get(&j.router_id).into_iter().flatten().map(|&(a,b)|{discovered.extend([a,b]);json!({"a":a,"b":b})}).collect();json!({"pairs":pairs})},
             "SHIELD_STATUS"=>{let n=&self.nodes[&j.target.unwrap_or(j.router_id)];json!({"policy":n.policy,"exceptions":n.exceptions,"isolated":n.isolated})},
-            "HOST_SCAN"=>{let n=&self.nodes[&j.target.unwrap()];json!({"power":n.power,"assessment":if n.compromised {"COMPROMISED"}else if self.attacks.keys().any(|&(_,t)|t==n.id) {"SUSPICIOUS"}else{"CLEAN"}})},
+            "HOST_SCAN"=>{let n=&self.nodes[&j.target.unwrap()];json!({"power":n.power,"assessment":if n.compromised {"COMPROMISED"}else if self.exposure_by_target.contains_key(&n.id) {"SUSPICIOUS"}else{"CLEAN"}})},
             "CONNECTION_SCAN"|"FULL_HOST_SCAN"=>{
                 let id=j.target.unwrap();let con=self.connections(id);
                 for entry in con.as_array().unwrap() {discovered.insert(entry["peer"].as_u64().unwrap());}
@@ -390,14 +434,20 @@ impl Core {
             self.emit("exposure_reset",None,"enemy",json!({"source":source,"target":target,"previous_age":age,"reason":"session interrupted"}));
         }}
         let mut claimed:BTreeSet<u64>=valid.keys().map(|&(_,target)|target).collect();
+        let mut active_by_source=BTreeMap::<_,Vec<_>>::new();
+        for &(source,target) in valid.keys(){active_by_source.entry(source).or_default().push(target);}
         // Capture sources before infections: a newly infected host cannot spread in this interval.
         let sources:Vec<_>=self.nodes.values().filter(|n|n.compromised&&n.power=="ONLINE"&&n.kind!="ROUTER").map(|n|n.id).collect();
         let mut infected=BTreeSet::new();
         for source in sources {
-            let mut selected:Vec<_>=valid.keys().filter(|&&(s,_)|s==source).map(|&(_,t)|t).collect();
+            let mut selected=active_by_source.remove(&source).unwrap_or_default();
             selected.truncate(self.config.attack_slots);
-            let mut candidates:Vec<_>=self.nodes.values().filter(|n|n.kind!="ROUTER"&&!n.compromised&&!claimed.contains(&n.id)&&self.traffic_allowed(source,n.id)).map(|n|n.id).collect();
-            while selected.len()<self.config.attack_slots&&!candidates.is_empty() {let i=(self.random() % candidates.len() as u64) as usize;let target=candidates.remove(i);claimed.insert(target);selected.push(target);}
+            // Existing sessions already occupy their slots. Avoid a full-world
+            // candidate pass unless this source actually needs a replacement.
+            if selected.len()<self.config.attack_slots && !self.nodes[&source].isolated {
+                let mut candidates:Vec<_>=self.nodes.values().filter(|n|n.kind!="ROUTER"&&!n.compromised&&!claimed.contains(&n.id)&&self.traffic_allowed(source,n.id)).map(|n|n.id).collect();
+                while selected.len()<self.config.attack_slots&&!candidates.is_empty() {let i=(self.random() % candidates.len() as u64) as usize;let target=candidates.remove(i);claimed.insert(target);selected.push(target);}
+            }
             for target in selected {
                 self.attack_attempts+=1;
                 *self.host_attempts.entry(source).or_default()+=1;
@@ -410,8 +460,12 @@ impl Core {
             }
         }
         for target in infected {self.nodes.get_mut(&target).unwrap().compromised=true;self.sessions.retain(|_,s|s.target!=target);self.emit("infection",None,"enemy",json!({"target":target}));}
+        self.exposure_by_target.clear();
+        for (&(_,target),&age) in &self.attacks {self.exposure_by_target.entry(target).and_modify(|current|*current=(*current).max(age)).or_insert(age);}
     }
     fn finish(&mut self,mut j:Job,outcome:Result<Value,String>) {
+        if let Some(ids)=self.running_by_router.get_mut(&j.router_id){ids.remove(&j.id);}
+        if !readonly(&j.action){self.mutation_locks.remove(&j.target.unwrap_or(j.router_id));}
         j.finished_at=Some(self.tick);
         match outcome {
             Ok(data)=>{
@@ -429,7 +483,7 @@ impl Core {
     pub fn barrier(&mut self)->Result<(),String> {
         if self.score.as_ref().is_some_and(|s|s.defeated_at.is_some() || s.verified_at.is_some()) || (self.score.is_some() && self.config.tick_limit.is_some_and(|h|self.tick>=h)) {return Err("INVALID_ARGUMENT: scored match is finished".into());}
         self.tick=self.tick.checked_add(1).ok_or_else(||err("LIMIT_EXCEEDED"))?;
-        let mut running:Vec<_>=self.jobs.values().filter(|j|j.state=="RUNNING").map(|j|(j.router_id,j.local_sequence,j.id)).collect();
+        let mut running:Vec<_>=self.running_by_router.values().flatten().map(|id|{let j=&self.jobs[id];(j.router_id,j.local_sequence,j.id)}).collect();
         running.sort();
         let mut scans=vec![];
         // Mutations use router ID then local sequence, independent of global IDs.
@@ -460,7 +514,7 @@ impl Core {
         scenario["seed"]=json!(self.config.seed.to_string());
         let mut links:Vec<_>=self.edges.iter().map(|&(source,target)|json!({"source":source,"target":target})).collect();
         links.extend(self.nodes.values().filter(|n|n.kind!="ROUTER").map(|n|json!({"source":n.router_id,"target":n.id})));
-        let nodes:Vec<_>=self.nodes.values().map(|node|{let mut value=serde_json::to_value(node).unwrap();let age=self.attacks.iter().filter(|((_,target),_)|*target==node.id).map(|(_,age)|*age).max().unwrap_or(0);value["exposure"]=if age>0{json!({"age":age,"started_at":self.tick.saturating_sub(age)+1})}else{Value::Null};value["infection"]=json!(if node.kind=="ROUTER"{"IMMUNE"}else if node.compromised{"COMPROMISED"}else if age>0{"IN_DANGER"}else{"HEALTHY"});value["health"]=if node.kind=="ROUTER"{Value::Null}else if node.compromised{json!(0)}else if age>0{json!((5*(self.config.infection_intervals-age)).div_ceil(self.config.infection_intervals).clamp(1,5))}else{json!(5)};value}).collect();
+        let nodes:Vec<_>=self.nodes.values().map(|node|{let mut value=serde_json::to_value(node).unwrap();let age=self.exposure_by_target.get(&node.id).copied().unwrap_or(0);value["exposure"]=if age>0{json!({"age":age,"started_at":self.tick.saturating_sub(age)+1})}else{Value::Null};value["infection"]=json!(if node.kind=="ROUTER"{"IMMUNE"}else if node.compromised{"COMPROMISED"}else if age>0{"IN_DANGER"}else{"HEALTHY"});value["health"]=if node.kind=="ROUTER"{Value::Null}else if node.compromised{json!(0)}else if age>0{json!((5*(self.config.infection_intervals-age)).div_ceil(self.config.infection_intervals).clamp(1,5))}else{json!(5)};value}).collect();
         let sessions:Vec<_>=self.sessions.values().map(|s|{let mut value=serde_json::to_value(s).unwrap();value["route"]=json!(self.route(s.source,s.target));value}).collect();
         json!({"tick":self.tick,"scenario":scenario,"nodes":nodes,"links":links,
             "score":self.score.as_ref().map(|s|s.snapshot(self)).unwrap_or(json!({"enabled":false,"outcome":"PRACTICE"})),

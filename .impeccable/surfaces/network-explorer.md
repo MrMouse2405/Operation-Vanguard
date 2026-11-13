@@ -30,4 +30,10 @@ selected node, with pan for larger neighborhoods. The Ctrl/⌘ K badge is clicka
 and search focus outlines the complete field. Seconds/tick sets minimum total
 tick duration including computation during playback; 0 means full speed.
 FORM: User-pinned explorer prototype; code-led; seed: none (user supplied).
+PERFORMANCE: Closed dialogs and collapsed JSON mount no descendants. JSON and jobs/
+connections page at 100; observations at 50. Immutable projections paint at most
+10 Hz without changing simulation ticks. Indexed membership avoids quadratic LAN
+filtering; graph data/viewport stay stable when visual state is unchanged. The
+phone inspector scrolls within its resizable height. Verified at 10,000 nodes with
+desktop and phone captures; regression tests cover hidden DOM and update bursts.
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
