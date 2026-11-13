@@ -1,0 +1,47 @@
+# Vanguard progressive level 01: 10 total nodes, 1 LANs.
+# 1 routers + 8 workstations + 1 servers.
+# Maximum LAN size: 10 nodes INCLUDING router and servers.
+# 1 initial infections; 0 links; 8 required pairs.
+# Standard engine fuel, memory, task slots and infection timings.
+# Reproduce: python3 progressive/generate.py
+version = 1
+routers = [{ id = 112 }]
+lans = [
+  { id = 4262, router = 112 }, # site 1; 10 total nodes
+]
+workstations = [
+  { id = 10001, lan = 4262, compromised = true },
+  { id = 10008, lan = 4262 },
+  { id = 10015, lan = 4262 },
+  { id = 10022, lan = 4262 },
+  { id = 10029, lan = 4262 },
+  { id = 10036, lan = 4262 },
+  { id = 10043, lan = 4262 },
+  { id = 10050, lan = 4262 },
+]
+servers = [
+  { id = 200003, lan = 4262 },
+]
+connections = [
+]
+
+[simulation]
+seed = 20262109
+tick_limit = 120
+tick_ms = 0
+
+[mission]
+enabled = true
+recovery_ticks = 14
+outage_ticks = 30
+service_threshold_percent = 90
+services = [
+  { client = 10001, server = 200003, weight = 2 },
+  { client = 10008, server = 200003, weight = 2 },
+  { client = 10015, server = 200003, weight = 2 },
+  { client = 10022, server = 200003, weight = 2 },
+  { client = 10029, server = 200003, weight = 2 },
+  { client = 10036, server = 200003, weight = 2 },
+  { client = 10043, server = 200003, weight = 2 },
+  { client = 10050, server = 200003, weight = 2 },
+]

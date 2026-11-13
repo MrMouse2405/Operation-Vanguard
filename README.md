@@ -50,6 +50,8 @@ URL is printed on startup. The process binds to loopback by default.
 - `vanguard/agents/examples/`: runnable sensing, shielding, recovery, solo, warning,
   leader and optional debug-reconstruction exercises.
 - `vanguard/networks/`: tutorial/three-LAN topologies and an explicit TOML generator.
+- [`progressive/`](progressive/README.md): ten complete networks from 10 to 10,000
+  total nodes, with 1–40 LANs, increasing infection pressure and a 500-node/LAN cap.
 
 The entrypoint's parent is its controlled script root. `require('team')` uses
 staged `team.lua`; all Lua dependencies are staged consistently before startup.
