@@ -77,5 +77,14 @@ indexed host/LAN filtering, immutable projections and live paints capped at 10 H
 Every simulation barrier still executes; command and terminal feedback is immediate.
 Jobs/connections have 100-record pages, observations 50-record pages, and expanded
 JSON collections 100-entry pages. Closed dialogs mount no hidden JSON content.
+The Globe network view adds a GitHub-inspired dotted Earth and directional live
+task/session arcs. Geography is deterministic and illustrative, not a real network
+location. Topology also shows animated Vanguard-to-host task arrows and coloured
+host connections. Globe filters and its paginated endpoint directory share node
+inspection; motion respects visibility, playback and reduced-motion preferences.
+Jobs combines task lifecycle, counts, filters and results in one telemetry view.
+Headless runs compute per-tick replay hashes only when a replay is requested.
+The browser opts into lossless record/append patches; legacy socket field deltas
+and full snapshot resynchronization remain available.
 Seconds/tick sets a minimum total tick duration including computation during
 continuous playback; 0 means full speed.

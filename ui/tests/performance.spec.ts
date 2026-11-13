@@ -13,7 +13,7 @@ test('10,000-node live dashboard keeps hidden details, tables and update bursts 
 	const sessions=Array.from({length:120},(_,index)=>({id:index+1,source:10001+index,target:19960,opened_at:0,route:[1,40]}));
 	const snapshot={schema_version:1,run_id:'performance-10000',seq:1,tick:0,control:'READY',nodes,agents,jobs,scenario:{nodes,mission:{services}},score:{enabled:false,outcome:'PRACTICE',services},links:[],sessions,events:[],topics:[],history:{first_seq:1,evicted:0}};
 	let push:(value:any)=>void=()=>{};let unexpectedCommands=0;
-	await page.routeWebSocket('**/api/ws',socket=>{
+	await page.routeWebSocket('**/api/ws*',socket=>{
 		push=value=>socket.send(JSON.stringify(value));
 		socket.onMessage(()=>unexpectedCommands++);
 		push({schema_version:1,type:'snapshot',run_id:snapshot.run_id,seq:1,tick:0,snapshot});

@@ -25,6 +25,9 @@
 .resizable-explorer { grid-template-columns:var(--left-pane) 7px minmax(0,1fr) 7px var(--right-pane); }
 .explorer-shell .table-pagination { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 12px; color:var(--muted); font:10px monospace; }
 .explorer-shell .table-pagination button { font:10px monospace; }
+.explorer-shell .explorer-viewbar { flex-wrap:wrap; }
+.explorer-shell .view-toggle { flex-shrink:0; }
+.explorer-shell .jobs-tools { flex-wrap:wrap; gap:10px; }
 @media(max-width:1000px) {
   .resizable-explorer { grid-template-columns:var(--left-pane) 7px minmax(0,1fr); }
   .resizable-explorer>.pane-resize:nth-last-child(2) { grid-column:1/-1; }

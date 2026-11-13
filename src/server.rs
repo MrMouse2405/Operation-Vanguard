@@ -27,7 +27,7 @@ fn tick_delay(seconds_per_tick:f64,elapsed:Duration)->Duration {
 }
 enum RequestMessage {Command(Command,oneshot::Sender<Value>),Stop}
 #[derive(Clone,Debug)]
-struct Published {seq:u64,text:Arc<str>}
+struct Published {seq:u64,text:Arc<str>,records:Arc<str>}
 #[derive(Clone)]
 pub struct Server {sender:mpsc::Sender<RequestMessage>,snapshot:Arc<RwLock<Value>>,events:broadcast::Sender<Published>}
 
@@ -51,7 +51,8 @@ impl Server {
                     let delta:value_delta::Delta=value_delta::between(&previous,&value);
                     json!({"schema_version":1,"run_id":runtime.run_id,"seq":seq,"tick":value["tick"],"type":"update","base_seq":previous["seq"],"delta":delta})
                 };
-                let _=events.send(Published{seq:*seq,text:envelope.to_string().into()});
+                let records=if envelope["type"]=="snapshot"{envelope.clone()}else{json!({"schema_version":1,"run_id":runtime.run_id,"seq":seq,"tick":value["tick"],"type":"update","base_seq":previous["seq"],"patch":crate::projection::between(&previous,&value)})};
+                let _=events.send(Published{seq:*seq,text:envelope.to_string().into(),records:records.to_string().into()});
             }
             publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);let _=ready_tx.send(Ok(()));
             let mut last_publish=Instant::now();
@@ -153,8 +154,8 @@ impl<'r> FromRequest<'r> for LocalOrigin {
 pub fn snapshot(server:&State<Server>)->Json<Value>{Json(server.snapshot())}
 #[rocket::post("/api/command",format="json",data="<command>")]
 pub async fn command(_origin:LocalOrigin,server:&State<Server>,command:Json<Command>)->Json<Value>{Json(server.command(command.into_inner()).await)}
-#[rocket::get("/api/ws")]
-pub fn websocket(_origin:LocalOrigin,ws:rocket_ws::WebSocket,server:&State<Server>)->rocket_ws::Channel<'static>{
+#[rocket::get("/api/ws?<records>")]
+pub fn websocket(_origin:LocalOrigin,ws:rocket_ws::WebSocket,server:&State<Server>,records:Option<bool>)->rocket_ws::Channel<'static>{
     let server=server.inner().clone();
     ws.config(rocket_ws::Config{max_message_size:Some(4096),max_frame_size:Some(4096),..Default::default()}).channel(move |mut stream|Box::pin(async move{
         // Subscribe before projection, then discard events at/below its watermark.
@@ -162,9 +163,9 @@ pub fn websocket(_origin:LocalOrigin,ws:rocket_ws::WebSocket,server:&State<Serve
         stream.send(rocket_ws::Message::Text(json!({"schema_version":1,"run_id":snapshot["run_id"],"seq":watermark,"tick":snapshot["tick"],"type":"snapshot","snapshot":snapshot}).to_string())).await?;
         loop {rocket::tokio::select!{
             update=updates.recv()=>{
-                let value=match update{Ok(value)=>value,Err(broadcast::error::RecvError::Lagged(_))=>{let s=server.snapshot();Published{seq:s["seq"].as_u64().unwrap_or(0),text:json!({"schema_version":1,"run_id":s["run_id"],"seq":s["seq"],"tick":s["tick"],"type":"snapshot","snapshot":s}).to_string().into()}},Err(_)=>break};
+                let value=match update{Ok(value)=>value,Err(broadcast::error::RecvError::Lagged(_))=>{let s=server.snapshot();let text:Arc<str>=json!({"schema_version":1,"run_id":s["run_id"],"seq":s["seq"],"tick":s["tick"],"type":"snapshot","snapshot":s}).to_string().into();Published{seq:s["seq"].as_u64().unwrap_or(0),records:text.clone(),text}},Err(_)=>break};
                 if value.seq<=watermark{continue;}watermark=value.seq;
-                stream.send(rocket_ws::Message::Text(value.text.to_string())).await?;
+                stream.send(rocket_ws::Message::Text(if records==Some(true){value.records}else{value.text}.to_string())).await?;
             },
             incoming=stream.next()=>{match incoming{
                 Some(Ok(rocket_ws::Message::Text(text)))=>{

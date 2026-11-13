@@ -9,6 +9,8 @@
 	let open = $state(false);
 	let page = $state(0);
 	let runId = $derived(snapshot?.run_id);
+	let allJobs = $derived((snapshot?.jobs??[]).filter(j=>!agent||String(j.agent_id)===agent));
+	let counts = $derived({running:allJobs.filter(j=>j.state==='RUNNING').length,completed:allJobs.filter(j=>j.state==='COMPLETED').length,failed:allJobs.filter(j=>j.state==='FAILED').length});
 	let jobs = $derived((snapshot?.jobs ?? []).filter(j => (!agent || String(j.agent_id) === agent) && (compact ? j.state === 'RUNNING' : stateFilter === 'ALL' || j.state === stateFilter)).toSorted((a, b) => Number(b.state === 'RUNNING') - Number(a.state === 'RUNNING') || b.started_at - a.started_at || String(a.id).localeCompare(String(b.id))));
 	let selected = $derived(snapshot?.jobs.find(j => j.id === selectedId));
 	let related = $derived(open ? snapshot?.events.filter(e => selected && (String(e.data?.task_id ?? e.data?.job_id ?? '') === String(selected.id) || String(e.data?.id ?? '') === String(selected.id))) ?? [] : []);
@@ -16,7 +18,7 @@
 	$effect(() => { if (page * 100 >= jobs.length) page = 0; });
 	function inspect(job: Job) { selectedId = job.id; open = true; }
 </script>
-<div class="jobs-tools">{#if compact}<span>RUNNING engine tasks</span>{:else}<label>State <select aria-label="Job state" bind:value={stateFilter}><option value="ALL">All states</option><option>RUNNING</option><option>COMPLETED</option><option>FAILED</option></select></label>{/if}<span class="muted">{jobs.length} {compact ? 'tasks' : 'jobs'}</span></div>
+<div class="jobs-tools">{#if compact}<span>RUNNING engine tasks</span>{:else}<div class="job-state-buttons" role="group" aria-label="Task status filters"><button aria-pressed={stateFilter==='ALL'} onclick={()=>stateFilter='ALL'}>All <b>{allJobs.length}</b></button><button aria-pressed={stateFilter==='RUNNING'} onclick={()=>stateFilter='RUNNING'}><i class="green-dot"></i> Running <b>{counts.running}</b></button><button aria-pressed={stateFilter==='COMPLETED'} onclick={()=>stateFilter='COMPLETED'}>Completed <b>{counts.completed}</b></button><button aria-pressed={stateFilter==='FAILED'} onclick={()=>stateFilter='FAILED'}>Failed <b class:red={counts.failed>0}>{counts.failed}</b></button></div>{/if}<span class="muted">{compact?'Running tasks':'Engine tasks · running first · select a row for results'}</span></div>
 <div class="table-scroll" class:compact>
 	<table class="jobs-table"><thead><tr><th>Task / action</th><th>Vanguard / target</th><th>State / progress</th><th>Fuel</th></tr></thead><tbody>
 		{#each jobs.slice(page * 100, (page + 1) * 100) as job (`${snapshot?.run_id}-${job.id}`)}
@@ -34,3 +36,7 @@
 		<h3>Related events · retained window</h3>{#each related as event (event.seq)}<div class="event-row"><span class="muted">T{event.tick} · {event.kind}</span><JsonTree value={event.data} /></div>{:else}<p class="muted">No related events in the retained window.</p>{/each}
 	{:else}<p class="muted">This job is no longer in the current run.</p>{/if}
 </Modal>
+
+<style>
+	.job-state-buttons{display:flex;flex-wrap:wrap;gap:5px}.job-state-buttons button{display:flex;align-items:center;gap:6px;font-size:10px;padding:6px 8px}.job-state-buttons button[aria-pressed=true]{background:var(--selected,#20333e);border-color:#90b8fc;color:#dcecff}.job-state-buttons b{font:10px monospace;color:var(--muted)}
+</style>

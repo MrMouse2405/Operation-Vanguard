@@ -116,6 +116,27 @@ page in groups of 50, and expanded JSON collections page in groups of 100. Close
 dialogs do not render their contents. Live projections update at most 10 times per
 second without slowing or skipping simulation ticks; controls publish immediately.
 
+**Globe**, beside Topology and Table, shows a dotted Earth with directional live
+communications and Vanguard task arcs. Blue arrows are running router tasks;
+amber is active exposure, red a compromised endpoint, and emerald another live
+host connection. LAN locations are stable, **illustrative geography**. Drag or use
+arrow keys to orbit, use `+` / `-` to zoom, filter by LAN/activity, and inspect
+endpoints in the paginated flow directory. Geometry is local: no map service or
+internet connection is required. The drawing is bounded to 160 flows (both task
+and connection capacity reserved); all flows remain available in the directory.
+Motion pauses with the match and respects reduced-motion preferences. Topology
+uses matching coloured, moving directional task/session arrows. Required-service
+dependencies are not presented as live sessions.
+
+**Jobs** now combines Jobs and Tasks, with All / Running / Completed / Failed
+counts and filters. Running tasks sort first; select a job to inspect its result,
+failure, fuel and associated events.
+
+Live browser updates use record-level patches and append-only observation/event
+updates rather than replacing whole changed inventories. Reconnect still uses a
+full snapshot. Headless execution without `--replay` skips intermediate snapshot
+hashes; the final printed hash remains identical to replay mode.
+
 - **Pause** acknowledges a stable barrier; no world/task/message progress follows.
 - **Resume** preserves VMs and world state.
 - **+1 tick / Forward** execute every normal backend barrier and remain paused,

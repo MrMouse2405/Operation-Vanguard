@@ -30,6 +30,18 @@ selected node, with pan for larger neighborhoods. The Ctrl/⌘ K badge is clicka
 and search focus outlines the complete field. Seconds/tick sets minimum total
 tick duration including computation during playback; 0 means full speed.
 FORM: User-pinned explorer prototype; code-led; seed: none (user supplied).
+GLOBE: Third view beside Topology and Table. GitHub-inspired dotted Earth with
+directional elevated arcs, moving packets and a restrained blue atmosphere. LAN
+locations are stable and explicitly illustrative. Blue = running Vanguard task;
+amber = active exposure; red = compromised endpoint; emerald = other live session.
+Show actual sessions/tasks only, with an accessible paginated endpoint directory.
+Share LAN/search scope and node inspection; keep Globe open when selecting a host.
+At most 160 arcs; reserve capacity for host sessions so tasks cannot hide them.
+Draw at most 30fps while visible, with reduced-motion and paused-state support.
+TOPOLOGY ACTIVITY: Directional, animated dashed arrows distinguish router tasks
+from live host connections. Show current LAN activity before selecting a node.
+TELEMETRY: Jobs and Tasks share one Jobs view with counts and All / Running /
+Completed / Failed filters. Completed task results remain inspectable.
 PERFORMANCE: Closed dialogs and collapsed JSON mount no descendants. JSON and jobs/
 connections page at 100; observations at 50. Immutable projections paint at most
 10 Hz without changing simulation ticks. Indexed membership avoids quadratic LAN

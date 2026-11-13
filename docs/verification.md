@@ -2,6 +2,52 @@
 
 ## Executed checks
 
+### Record updates, replay processing and globe — 2026-11-12
+
+- **54 Rust tests pass**. New lossless patch reconstruction cases cover object
+  changes/removal, observation append, record eviction, reordered arrays and
+  restart shapes; a single changed host among 10,000 produces a patch under 200
+  bytes. Session-index tests verify directional reuse, opposite directions,
+  interruption cleanup and reopening with a fresh ID.
+- **12 Chromium tests pass**, including globe rendering/animation, LAN/activity
+  filters, endpoint inspection, keyboard camera controls, paused-frame stability,
+  mobile overflow and the combined Jobs lifecycle filters. A nested wire patch
+  completes a task and appends an observation without replacing inventories.
+  Existing reconnect, stepping, score, debug, pane and 10,000-node regressions pass.
+  Svelte check: **0 errors, 0 warnings**. Release build passed. One concurrent
+  debug/release UI build collided in `.svelte-kit/output`; rerunning the release
+  build after the browser build completed passed. UI detector: `[]`.
+- Headless plain/replay comparison uses the prior optimized release (`b45d004`)
+  and this release, `ostrich.lua`, progressive level 10 and 20 barriers:
+
+  | Mode | Before | After | Maximum RSS before / after |
+  | --- | ---: | ---: | ---: |
+  | No replay | 3.748 s | 1.133 s (~3.3×) | 290,516 / 199,884 KiB |
+  | Replay | 3.746 s | 3.577 s | 290,468 / 203,996 KiB |
+
+  These single-run, same-machine measurements include startup and final hashing;
+  replay also includes snapshot/output serialization. Plain mode skips unused
+  intermediate hashes. Scalar VM limits remove retained topology/service clones.
+  All **21 outbreak replay hashes** and both plain final hashes match the prior
+  release. The final-network control still wins **T45 / 999.91** with all **46
+  hashes** matching the prior parallel engine and zero runtime errors.
+- On the real final-test network with Basic Defender, simultaneous legacy and
+  record-patch sockets observed the same nine simulation publications. Legacy
+  updates totalled **47,573,406 bytes**; record updates totalled **1,282,216 bytes**
+  (**97.3% less**). Initial/full snapshots and command acknowledgements are excluded;
+  tiny scalar-only controls have slightly more patch framing overhead. Reduction
+  varies with actual changes; it is not a universal compression ratio.
+- The actual 10,000-node globe had **906 mounted elements**, no horizontal overflow
+  at 390px, and no browser errors. Desktop and phone captures were reviewed.
+  Globe drawing is bounded to 160 arcs, reserves host-session capacity alongside
+  task capacity, and exposes every filtered flow via eight-row pages. Dot Earth
+  geometry is hand-authored/local with clearly illustrative LAN locations.
+  Directional blue task arrows and amber/red/emerald sessions use actual engine
+  records. Topology shows the same activity colours and animated dashed arrows.
+  Animation stops on pause/reduced-motion and suspends drawing offscreen/hidden.
+- Evidence remains ignored under `.impeccable/review/globe-*`; persistent tests are
+  `src/projection.rs`, `src/sim_tests.rs` and `ui/tests/globe.spec.ts`.
+
 ### Large-network engine and dashboard optimization — 2026-11-12
 
 - Cached static sorted-neighbour BFS trees with O(R²) parent storage. Live endpoint

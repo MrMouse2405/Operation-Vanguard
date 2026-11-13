@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn indexed_sessions_preserve_direction_reuse_and_cleanup(){
+    let mut c=small();
+    let first=c.communicate(1001,1003).unwrap();assert_eq!(c.communicate(1001,1003),Some(first));
+    let reverse=c.communicate(1003,1001).unwrap();assert_ne!(first,reverse);
+    assert_eq!(c.connections(1001).as_array().unwrap().len(),2);
+    c.nodes.get_mut(&1001).unwrap().isolated=true;c.barrier().unwrap();
+    assert!(c.sessions.is_empty());assert!(c.session_by_pair.is_empty());assert!(c.sessions_by_host.is_empty());
+    c.nodes.get_mut(&1001).unwrap().isolated=false;
+    let next=c.communicate(1001,1003).unwrap();assert!(next>reverse);
+    c.close_host_sessions(1003,true);assert!(c.sessions.is_empty());assert!(c.sessions_by_host.is_empty());
+}
+
+#[test]
 fn cached_routes_match_sorted_bfs_and_filters_remain_live(){
     let c=Core::new(Config{router_count:6,hosts_per_lan:2,server_count:0,router_edges:Some(vec![[1,2],[1,3],[2,4],[3,4],[4,5],[3,6],[5,6]]),initial_compromised:Some(vec![]),..Config::default()}).unwrap();
     fn reference(c:&Core,source:u64,target:u64)->Option<Vec<u64>>{

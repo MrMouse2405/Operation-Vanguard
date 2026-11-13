@@ -5,7 +5,7 @@ test('sidebar selection locates a later-page node and renders its connections be
     ...Array.from({length:160},(_,i)=>({id:1001+i,type:'WORKSTATION',router_id:1,lan_id:1,power:'ONLINE',compromised:false,health:5,policy:'DEFAULT_ALLOW',exceptions:[]})),
     {id:2001,type:'SERVER',router_id:2,lan_id:2,power:'ONLINE',compromised:false,health:5,policy:'DEFAULT_ALLOW',exceptions:[]}];
   const snapshot={schema_version:1,run_id:'connections-fixture',seq:1,tick:7,control:'PAUSED',nodes,agents:[{id:101,router_id:1,known:[1],observations:[]}],links:[],sessions:[{id:1,source:1081,target:2001,opened_at:1,route:[1,2]}],jobs:[],events:[],topics:[],scenario:{tick_limit:1000},score:{enabled:false,outcome:'PRACTICE'}};
-  await page.routeWebSocket('**/api/ws',ws=>ws.send(JSON.stringify({schema_version:1,type:'snapshot',run_id:snapshot.run_id,seq:1,tick:7,snapshot})));
+  await page.routeWebSocket('**/api/ws*',ws=>ws.send(JSON.stringify({schema_version:1,type:'snapshot',run_id:snapshot.run_id,seq:1,tick:7,snapshot})));
   await page.goto('/');
   await page.getByRole('button',{name:'Table',exact:true}).click();
   await page.getByRole('button',{name:'Focus host search'}).click();

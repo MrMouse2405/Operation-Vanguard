@@ -109,7 +109,7 @@ test('large snapshot renders bounded overview, table and LAN detail',async({page
 	}
 	const snapshot={schema_version:1,run_id:'large-fixture',seq:1,tick:0,control:'READY',scenario:{tick_limit:1000},nodes,agents,links:[],sessions:[],jobs:[],events:[],topics:[],history:{first_seq:1,evicted:0},score:{enabled:false,outcome:'PRACTICE'}};
 	let push=()=>{};
-	await page.routeWebSocket('**/api/ws',ws=>{push=()=>ws.send(JSON.stringify({schema_version:1,type:'snapshot',run_id:snapshot.run_id,seq:snapshot.seq,tick:0,snapshot}));push();});
+	await page.routeWebSocket('**/api/ws*',ws=>{push=()=>ws.send(JSON.stringify({schema_version:1,type:'snapshot',run_id:snapshot.run_id,seq:snapshot.seq,tick:0,snapshot}));push();});
 	await page.goto('/');await expect(page.locator('.lan-tile')).toHaveCount(32);
 	await page.getByRole('button',{name:'Table',exact:true}).click();await expect(page.locator('.lan-table tbody tr')).toHaveCount(32);
 	await page.screenshot({path:'../.impeccable/review/explorer-lan-table.png',fullPage:true});

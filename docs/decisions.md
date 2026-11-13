@@ -180,6 +180,24 @@ are part of the supported sandbox, not alternate Vanguard API signatures.
 
 ## Protocol, lifecycle, and resources
 
+- The dashboard opts into `GET /api/ws?records=true`. Its update envelopes carry
+  `patch` rather than `delta`, with the same run/sequence/base-sequence checks.
+  Patches replace scalars (`set`), recurse object `fields` with `removed` keys,
+  append unchanged-prefix arrays (`append`), sparsely patch fixed-position array
+  records (`items`), or update/evict stable-ID arrays (`key`, `changes`, `removed`).
+  Full replacements handle arbitrary shape/order changes. Applying a patch must
+  reproduce the next full projection exactly. Unchanged object identities survive
+  the immutable reducer and normalization. Legacy `/api/ws` retains field deltas.
+- Headless execution collects boundary hashes only under `--replay`, reuses its
+  final recorded hash, and constructs the final dashboard snapshot only for replay
+  output. Semantic JSON is streamed into SHA-256 through a 64 KiB buffer; pretty
+  replay output streams to a buffered file with explicit flush/error propagation.
+  The JSON representation and replay hashes are unchanged. VM callbacks/workers
+  copy scalar limits rather than cloning/retaining topology and mission services.
+- Session lookup is indexed by directional endpoint pair and host. Removal updates
+  both indexes for filter interruption, recovery and infection. Infection builds
+  one sorted clean/online/unisolated target inventory per boundary, retaining
+  per-source permission checks, claimed-target exclusion, order and RNG consumption.
 - JSON WebSocket `/api/ws`, HTTP snapshot and command fallbacks. Protocol v1
   envelopes contain run ID, committed tick, sequence and correlated request ID.
 - Tick updates carry changed top-level projection fields plus `base_seq`.

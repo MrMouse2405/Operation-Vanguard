@@ -31,7 +31,7 @@
 	let servers = $derived(hosts.filter(n => n.type === 'SERVER'));
 	let controlState = $derived(snapshot?.control ?? 'CONNECTING');
 	let canStep = $derived(!!snapshot && ['READY', 'PAUSED'].includes(controlState) && !runtime.pending);
-	const tabs = ['Activity', 'Jobs', 'Output', 'Messages', 'Pub / Sub', 'Tasks', 'Statistics'];
+	const tabs = ['Activity', 'Jobs', 'Output', 'Messages', 'Pub / Sub', 'Statistics'];
 	onMount(() => {
 		try{const saved=Number(localStorage.getItem('vanguard-dock-height'));if(saved>=120&&saved<=1000)dockHeight=saved;}catch{/* Optional preference. */}
 		runtime.connect(); return runtime.destroy;

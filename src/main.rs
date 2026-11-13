@@ -12,6 +12,7 @@ mod memory;
 mod network;
 mod scoring;
 mod debug;
+mod projection;
 
 #[derive(Parser)]
 #[command(name = "vanguard", version, about = "Run one supplied Lua agent in a private VM on every router")]
@@ -60,15 +61,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     if args.headless {
         let mut runtime = runtime::Runtime::new(config, "headless".into()).map_err(std::io::Error::other)?;
-        let mut hashes = vec![serde_json::json!({"tick":0,"hash":runtime.state_hash()})];
+        let mut hashes = Vec::new();
+        if args.replay.is_some(){hashes.push(serde_json::json!({"tick":0,"hash":runtime.state_hash()}));}
         for _ in 0..args.ticks {
             runtime.step().map_err(std::io::Error::other)?;
-            hashes.push(serde_json::json!({"tick":runtime.core.borrow().tick,"hash":runtime.state_hash()}));
+            if args.replay.is_some(){hashes.push(serde_json::json!({"tick":runtime.core.borrow().tick,"hash":runtime.state_hash()}));}
             if runtime.control == "FINISHED" { break; }
         }
-        let result = serde_json::json!({"hashes":hashes,"snapshot":runtime.snapshot()});
-        if let Some(path) = args.replay { fs::write(path, serde_json::to_vec_pretty(&result)?)?; }
-        println!("Tick {} · semantic hash {}", runtime.core.borrow().tick, runtime.state_hash());
+        let final_hash=hashes.last().and_then(|entry|entry["hash"].as_str()).map(str::to_owned).unwrap_or_else(||runtime.state_hash());
+        if let Some(path) = args.replay {
+            let result = serde_json::json!({"hashes":hashes,"snapshot":runtime.snapshot()});
+            let mut writer=std::io::BufWriter::new(fs::File::create(path)?);
+            serde_json::to_writer_pretty(&mut writer, &result)?;
+            std::io::Write::flush(&mut writer)?;
+        }
+        println!("Tick {} · semantic hash {}", runtime.core.borrow().tick, final_hash);
         return Ok(());
     }
     web::serve(files, args.port).await?;

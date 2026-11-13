@@ -225,6 +225,8 @@ pub struct Core {
     running_by_router:BTreeMap<u64,BTreeSet<u64>>,
     mutation_locks:BTreeMap<u64,u64>,
     exposure_by_target:BTreeMap<u64,u64>,
+    session_by_pair:BTreeMap<(u64,u64),u64>,
+    sessions_by_host:BTreeMap<u64,BTreeSet<u64>>,
 }
 impl Core {
     pub fn new(config: Config) -> Result<Self,String> {
@@ -246,7 +248,7 @@ impl Core {
         let rng = if config.seed == 0 { 0x9e3779b97f4a7c15 } else { config.seed };
         let scored=config.mission.as_ref().is_some_and(|m|m.enabled);
         let mut core=Self {score:None,config,tick:0,nodes:ns.into_iter().map(|n|(n.id,n)).collect(),agents,jobs:BTreeMap::new(),events:VecDeque::new(),sequence:0,
-            sessions:BTreeMap::new(),edges,history:BTreeMap::new(),submissions:BTreeMap::new(),attacks:BTreeMap::new(),rng,session_sequence:0,task_sequence:0,enemy_updates:0,attack_attempts:0,successful_connections:0,host_attempts:BTreeMap::new(),host_connections:BTreeMap::new(),routing,hosts_by_router,running_by_router:BTreeMap::new(),mutation_locks:BTreeMap::new(),exposure_by_target:BTreeMap::new()};
+            sessions:BTreeMap::new(),session_by_pair:BTreeMap::new(),sessions_by_host:BTreeMap::new(),edges,history:BTreeMap::new(),submissions:BTreeMap::new(),attacks:BTreeMap::new(),rng,session_sequence:0,task_sequence:0,enemy_updates:0,attack_attempts:0,successful_connections:0,host_attempts:BTreeMap::new(),host_connections:BTreeMap::new(),routing,hosts_by_router,running_by_router:BTreeMap::new(),mutation_locks:BTreeMap::new(),exposure_by_target:BTreeMap::new()};
         if scored {core.score=Some(crate::scoring::Score::new(&core));}
         Ok(core)
     }
@@ -370,12 +372,24 @@ impl Core {
     pub fn communicate(&mut self, source:u64,target:u64) -> Option<u64> {
         if !self.traffic_allowed(source,target) {return None;}
         for r in self.route(source,target)? {self.history.entry(r).or_default().insert((source.min(target),source.max(target)));}
-        if let Some(s)=self.sessions.values().find(|s|s.source==source&&s.target==target) {return Some(s.id);}
+        if let Some(id)=self.session_by_pair.get(&(source,target)) {return Some(*id);}
         self.session_sequence+=1;let id=self.session_sequence;
+        self.session_by_pair.insert((source,target),id);
+        for host in [source,target]{self.sessions_by_host.entry(host).or_default().insert(id);}
         self.sessions.insert(id,Session{id,source,target,opened_at:self.tick});Some(id)
     }
+    fn remove_session(&mut self,id:u64){
+        if let Some(session)=self.sessions.remove(&id){
+            self.session_by_pair.remove(&(session.source,session.target));
+            for host in [session.source,session.target]{if let Some(ids)=self.sessions_by_host.get_mut(&host){ids.remove(&id);if ids.is_empty(){self.sessions_by_host.remove(&host);}}}
+        }
+    }
+    fn close_host_sessions(&mut self,host:u64,inbound_only:bool){
+        let ids=self.sessions_by_host.get(&host).into_iter().flatten().copied().filter(|id|!inbound_only||self.sessions[id].target==host).collect::<Vec<_>>();
+        for id in ids{self.remove_session(id);}
+    }
     fn connections(&self,target:u64) -> Value {
-        let mut records:Vec<_>=self.sessions.values().filter_map(|s|if s.source==target {Some((s.target,s.opened_at,"OUTBOUND"))}else if s.target==target {Some((s.source,s.opened_at,"INBOUND"))}else{None}).collect();
+        let mut records:Vec<_>=self.sessions_by_host.get(&target).into_iter().flatten().map(|id|{let s=&self.sessions[id];if s.source==target{(s.target,s.opened_at,"OUTBOUND")}else{(s.source,s.opened_at,"INBOUND")}}).collect();
         records.sort();json!(records.into_iter().map(|(peer,opened_at,direction)|json!({"peer":peer,"opened_at":opened_at,"direction":direction})).collect::<Vec<_>>())
     }
     fn mutation(&mut self,j:&mut Job) -> Result<Value,String> {
@@ -426,11 +440,11 @@ impl Core {
     fn interval(&mut self) {
         self.enemy_updates+=1;
         let invalid:Vec<_>=self.sessions.values().filter(|s|!self.traffic_allowed(s.source,s.target)).map(|s|s.id).collect();
-        for id in invalid {self.sessions.remove(&id);}
+        for id in invalid {self.remove_session(id);}
         let old=std::mem::take(&mut self.attacks);
         let valid:BTreeMap<_,_>=old.iter().filter(|((s,t),_)|self.nodes[s].compromised&&self.nodes[s].power=="ONLINE"&&!self.nodes[t].compromised&&self.traffic_allowed(*s,*t)).map(|(pair,age)|(*pair,*age)).collect();
         for (&(source,target),&age) in &old {if !valid.contains_key(&(source,target)) {
-            self.sessions.retain(|_,s|s.source!=source||s.target!=target);
+            if let Some(id)=self.session_by_pair.get(&(source,target)).copied(){self.remove_session(id);}
             self.emit("exposure_reset",None,"enemy",json!({"source":source,"target":target,"previous_age":age,"reason":"session interrupted"}));
         }}
         let mut claimed:BTreeSet<u64>=valid.keys().map(|&(_,target)|target).collect();
@@ -439,13 +453,16 @@ impl Core {
         // Capture sources before infections: a newly infected host cannot spread in this interval.
         let sources:Vec<_>=self.nodes.values().filter(|n|n.compromised&&n.power=="ONLINE"&&n.kind!="ROUTER").map(|n|n.id).collect();
         let mut infected=BTreeSet::new();
+        // A single sorted boundary inventory; target permission stays live and
+        // claimed hosts are excluded per source. Preserve RNG candidate order.
+        let eligible:Vec<_>=self.nodes.values().filter(|n|n.kind!="ROUTER"&&!n.compromised&&n.power=="ONLINE"&&!n.isolated).map(|n|n.id).collect();
         for source in sources {
             let mut selected=active_by_source.remove(&source).unwrap_or_default();
             selected.truncate(self.config.attack_slots);
             // Existing sessions already occupy their slots. Avoid a full-world
             // candidate pass unless this source actually needs a replacement.
             if selected.len()<self.config.attack_slots && !self.nodes[&source].isolated {
-                let mut candidates:Vec<_>=self.nodes.values().filter(|n|n.kind!="ROUTER"&&!n.compromised&&!claimed.contains(&n.id)&&self.traffic_allowed(source,n.id)).map(|n|n.id).collect();
+                let mut candidates:Vec<_>=eligible.iter().copied().filter(|id|!claimed.contains(id)&&self.traffic_allowed(source,*id)).collect();
                 while selected.len()<self.config.attack_slots&&!candidates.is_empty() {let i=(self.random() % candidates.len() as u64) as usize;let target=candidates.remove(i);claimed.insert(target);selected.push(target);}
             }
             for target in selected {
@@ -459,7 +476,7 @@ impl Core {
                 }
             }
         }
-        for target in infected {self.nodes.get_mut(&target).unwrap().compromised=true;self.sessions.retain(|_,s|s.target!=target);self.emit("infection",None,"enemy",json!({"target":target}));}
+        for target in infected {self.nodes.get_mut(&target).unwrap().compromised=true;self.close_host_sessions(target,true);self.emit("infection",None,"enemy",json!({"target":target}));}
         self.exposure_by_target.clear();
         for (&(_,target),&age) in &self.attacks {self.exposure_by_target.entry(target).and_modify(|current|*current=(*current).max(age)).or_insert(age);}
     }
@@ -494,7 +511,8 @@ impl Core {
                 j.changed=if j.action=="RESTORE" {true}else{n.power!="ONLINE"};
                 if j.action=="RESTORE" {n.power="RESTORING".into();}else if n.power=="OFFLINE" {n.power="STARTING".into();}
                 // Recovery interrupts any partial infection, even if it completes this boundary.
-                self.sessions.retain(|_,s|s.source!=n.id&&s.target!=n.id || n.power=="ONLINE");
+                let interrupted=if n.power!="ONLINE"{Some(n.id)}else{None};
+                if let Some(host)=interrupted{self.close_host_sessions(host,false);}
                 j.entered=true;
             }
             if self.tick-j.started_at>=j.duration {

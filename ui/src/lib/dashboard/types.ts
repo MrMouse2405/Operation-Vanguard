@@ -13,14 +13,20 @@ export interface Snapshot {
 	jobs: Job[]; agents: Agent[]; events: RuntimeEvent[]; topics: RuntimeData[];
 	enemy_updates: number; history: { first_seq: number; evicted: number };
 }
-export interface Envelope { schema_version: number; run_id: string; seq: number; tick: number; type: string; request_id?: string; snapshot?: unknown; delta?: Partial<Snapshot>; base_seq?: number; error?: unknown }
+export interface Envelope { schema_version: number; run_id: string; seq: number; tick: number; type: string; request_id?: string; snapshot?: unknown; delta?: Partial<Snapshot>; patch?: import('./projection').Patch; base_seq?: number; error?: unknown }
 export type Command = 'Start' | 'Pause' | 'Resume' | 'Restart' | 'GetSnapshot' | 'StepTicks' | 'SetTickPacing';
 const normalizedNodes = new WeakMap<any[], Node[]>();
 const normalizedAgents = new WeakMap<any[], Agent[]>();
 const normalizedEvents = new WeakMap<any[], RuntimeEvent[]>();
+const normalizedRecords = new WeakMap<object,any>();
 function cachedList<T>(values:any[], cache:WeakMap<any[],T[]>, normalize:(value:any,index:number)=>T):T[] {
 	let result=cache.get(values);
-	if(!result){result=values.map(normalize);cache.set(values,result);}
+	if(!result){result=values.map((value,index)=>{
+		if(!value||typeof value!=='object')return normalize(value,index);
+		let record=normalizedRecords.get(value);
+		if(!record){record=normalize(value,index);normalizedRecords.set(value,record);}
+		return record;
+	});cache.set(values,result);}
 	return result;
 }
 export function normalizeSnapshot(value: any): Snapshot {

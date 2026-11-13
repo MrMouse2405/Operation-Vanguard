@@ -1,4 +1,5 @@
 import { normalizeSnapshot, type Snapshot, type Envelope, type Command } from './types';
+import { applyPatch } from './projection';
 
 export function createConnection() {
 	// Snapshots are immutable projections, not millions of deeply reactive fields.
@@ -28,7 +29,7 @@ export function createConnection() {
 		if (envelope.schema_version !== 1) { error = 'Unsupported runtime schema. Reload after updating Vanguard.'; return; }
 		if (envelope.request_id === request && (envelope.type === 'ack' || envelope.type === 'error')) { pending = null; clearTimeout(timeout); }
 		if (envelope.type === 'error') { error = typeof envelope.error === 'string' ? envelope.error : JSON.stringify(envelope.error ?? 'Command failed'); return; }
-		if (!envelope.snapshot && !envelope.delta) return;
+		if (!envelope.snapshot && !envelope.delta && !envelope.patch) return;
 		if (retired.has(envelope.run_id) && envelope.type !== 'snapshot') return;
 		if (canonical && envelope.run_id !== canonical.run_id && envelope.type !== 'snapshot') { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
 		if (canonical && envelope.run_id === canonical.run_id) {
@@ -37,8 +38,8 @@ export function createConnection() {
 			if (envelope.type === 'update' && envelope.seq > canonical.seq + 1) { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
 		}
 		try {
-			if (envelope.delta && (!canonical || envelope.base_seq !== canonical.seq)) { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
-			const next: any = envelope.snapshot ?? { ...canonical, ...envelope.delta };
+			if ((envelope.delta || envelope.patch) && (!canonical || envelope.base_seq !== canonical.seq)) { if (!syncing) { syncing = true; void send('GetSnapshot'); } return; }
+			const next: any = envelope.snapshot ?? (envelope.patch ? applyPatch(canonical,envelope.patch) : { ...canonical, ...envelope.delta });
 			if (!Array.isArray(next.nodes) || !next.run_id) throw new Error('Invalid runtime snapshot. Reconnect to request a fresh snapshot.');
 			if (canonical && canonical.run_id !== next.run_id) retired.add(canonical.run_id);
 			retired.delete(next.run_id);
@@ -71,7 +72,7 @@ export function createConnection() {
 		if (stopped) return;
 		if (!('WebSocket' in window)) { fallback = true; void getSnapshot(); poll = setInterval(getSnapshot, 1500); return; }
 		status = attempt ? 'Reconnecting' : 'Connecting';
-		socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws`);
+		socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws?records=true`);
 		socket.onopen = () => { attempt = 0; error = ''; status = 'Synchronizing'; syncing = false; };
 		socket.onmessage = event => { try { receive(JSON.parse(event.data)); } catch { error = 'Could not read runtime update. Request a fresh snapshot.'; } };
 		socket.onclose = () => { if (stopped) return; status = 'Reconnecting'; pending = null; clearTimeout(timeout); reconnect = setTimeout(connect, Math.min(15000, 500 * 2 ** attempt++)); };

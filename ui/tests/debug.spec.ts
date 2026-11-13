@@ -6,7 +6,7 @@ test('debug perspectives compare notes and metadata with bounded responsive draw
   const view={updated_at:7,nodes,edges:{link:{id:'link',from:'1',to:'2',info:{kind:'observed'}}},info:{explanation:'observed only'}};
   const snapshot={...live,debug:{enabled:true,agents:{101:{discovery:view,assessments:{...view,updated_at:9,info:{explanation:'fresh assessment'}}},102:{discovery:view}}}};
   await page.route('**/api/snapshot',route=>route.fulfill({json:snapshot}));
-  await page.routeWebSocket('**/api/ws',ws=>{ws.send(JSON.stringify({schema_version:1,type:'snapshot',run_id:snapshot.run_id,seq:snapshot.seq,tick:snapshot.tick,snapshot}));});
+  await page.routeWebSocket('**/api/ws*',ws=>{ws.send(JSON.stringify({schema_version:1,type:'snapshot',run_id:snapshot.run_id,seq:snapshot.seq,tick:snapshot.tick,snapshot}));});
   await page.goto('/');
   await page.getByRole('button',{name:/Compare agent drawings/}).click();
   await expect(page.getByRole('region',{name:'Debug network comparison'})).toBeVisible();

@@ -241,9 +241,19 @@ fn source(lua:&Lua,fallback:&str)->String {
     fallback.to_string()
 }
 
+/// Native callbacks and tick workers need scalar limits, not a private copy of
+/// the full topology and mission's potentially tens of thousands of services.
+#[derive(Clone,Copy)]
+struct VmLimits {
+    fuel_per_tick:u64,instruction_quantum:u64,max_payload_bytes:usize,max_handlers:usize,
+    tick_limit:Option<u64>,memory_limit:usize,dbg:bool,native_call_cost:u64,task_admission_cost:u64,
+}
+impl From<&Config> for VmLimits {
+    fn from(c:&Config)->Self{Self{fuel_per_tick:c.fuel_per_tick,instruction_quantum:c.instruction_quantum,max_payload_bytes:c.max_payload_bytes,max_handlers:c.max_handlers,tick_limit:c.tick_limit,memory_limit:c.memory_limit,dbg:c.dbg,native_call_cost:c.native_call_cost,task_admission_cost:c.task_admission_cost}}
+}
 impl Vm {
     fn new(id:u64,_router:u64,core:Shared<Core>,bus:Shared<Bus>,debug:Shared<crate::debug::Store>,gate:Arc<Gate>,staged:&Staged)->Result<Self,String> {
-        let config=core.borrow().config.clone();
+        let config=VmLimits::from(&core.borrow().config);
         let lua=Lua::new_with(StdLib::TABLE|StdLib::STRING|StdLib::MATH|StdLib::COROUTINE,LuaOptions::default()).map_err(|e|e.to_string())?;
         lua.set_memory_limit(config.memory_limit).map_err(|e|e.to_string())?;
         let memory=crate::memory::AllocationMeter::install(&lua).map_err(|e|e.to_string())?;
@@ -502,7 +512,7 @@ impl Runtime {
     }
     pub fn step(&mut self)->Result<(),String>{
         if self.control=="FINISHED" {return Ok(());}
-        let tick=self.core.borrow().tick;let config=self.core.borrow().config.clone();
+        let tick=self.core.borrow().tick;let config=VmLimits::from(&self.core.borrow().config);
         let mut vms=self.vms.values_mut().collect::<Vec<_>>();
         for cohort in vms.chunks_mut(VM_COHORT) {
             self.gate.reset(cohort.iter().map(|vm|vm.id));
@@ -540,7 +550,7 @@ impl Runtime {
         if config.tick_limit.is_some_and(|limit|core.tick>=limit) || core.score.as_ref().is_some_and(|s|s.defeated_at.is_some() || s.verified_at.is_some()){self.control="FINISHED".into();}
         Ok(())
     }
-    fn step_vm(vm:&mut Vm,core:&Shared<Core>,gate:&Gate,tick:u64,config:&Config)->Result<(),String>{
+    fn step_vm(vm:&mut Vm,core:&Shared<Core>,gate:&Gate,tick:u64,config:&VmLimits)->Result<(),String>{
             let delivery_turn=gate.enter(vm.id);
             let before=vm.budget.total.get();vm.budget.remaining.set(config.fuel_per_tick);
             // Capture recipient handlers when capacity permits delivery, never at send.
@@ -612,6 +622,17 @@ impl Runtime {
         if let Some(scenario)=value["scenario"].as_object_mut(){scenario.remove("tick_ms");}
         if let Some(agents)=value["agents"].as_array_mut(){for a in agents {for key in ["memory_bytes","peak_memory_bytes"]{a.as_object_mut().unwrap().remove(key);}}}
         value["scheduler"]=json!(self.vms.values().map(|vm|json!({"agent":vm.id,"fuel":vm.budget.total.get(),"remaining":vm.budget.remaining.get(),"coroutines":vm.runnable.iter().map(|c|json!({"source":c.source,"message":c.message,"wait":match &c.wait{Wait::Runnable=>json!({"kind":"runnable"}),Wait::Tick(t)=>json!({"tick":t}),Wait::Task(t)=>json!({"task":t}),Wait::Any(t)=>json!({"any":t})}})).collect::<Vec<_>>(),"pending":vm.pending.iter().map(|m|json!({"id":m.id,"sender":m.sender,"topic":m.topic,"payload":m.payload,"sent_at":m.sent_at})).collect::<Vec<_>>(),"subscriptions":vm.handlers.borrow().topics.keys().collect::<Vec<_>>(),"direct_handler":vm.handlers.borrow().direct.is_some()})).collect::<Vec<_>>());
-        format!("{:x}",Sha256::digest(serde_json::to_vec(&value).unwrap()))
+        struct HashWriter(Sha256);
+        impl std::io::Write for HashWriter {
+            fn write(&mut self,bytes:&[u8])->std::io::Result<usize>{self.0.update(bytes);Ok(bytes.len())}
+            fn flush(&mut self)->std::io::Result<()>{Ok(())}
+        }
+        let mut writer=HashWriter(Sha256::new());
+        {
+            let mut buffer=std::io::BufWriter::with_capacity(64*1024,&mut writer);
+            serde_json::to_writer(&mut buffer,&value).unwrap();
+            std::io::Write::flush(&mut buffer).unwrap();
+        }
+        format!("{:x}",writer.0.finalize())
     }
 }
