@@ -5,6 +5,7 @@ export interface Agent extends RuntimeData { id: number; router_id: number; know
 export interface Job extends RuntimeData { id: number | string; agent_id: number; router_id: number; action: string; state: string; started_at: number; duration: number }
 export interface RuntimeEvent extends RuntimeData { seq: number; tick: number; kind: string; agent_id?: number; source: string; data: RuntimeData }
 export interface Snapshot {
+    compact?:boolean;
     debug?: { enabled: boolean; agents: Record<string, Record<string, any>> };
     score: RuntimeData;
 	schema_version: number; run_id: string; seq: number; tick: number; control: string;

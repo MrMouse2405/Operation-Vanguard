@@ -25,16 +25,19 @@ pub struct Command {pub schema_version:u32,pub request_id:String,pub command:Str
 fn tick_delay(seconds_per_tick:f64,elapsed:Duration)->Duration {
     Duration::from_secs_f64(seconds_per_tick).saturating_sub(elapsed)
 }
-enum RequestMessage {Command(Command,oneshot::Sender<Value>),Stop}
+enum RequestMessage {Command(Command,bool,oneshot::Sender<Value>),Snapshot(oneshot::Sender<Value>),Details(Details,oneshot::Sender<Value>),Stop}
 #[derive(Clone,Debug)]
-struct Published {seq:u64,text:Arc<str>,records:Arc<str>}
+pub struct Details {pub kind:String,pub id:u64,pub target:Option<u64>,pub offset:usize,pub limit:usize,pub run_id:String}
+#[derive(Clone,Debug)]
+struct Published {seq:u64,text:Option<Arc<str>>,records:Option<Arc<str>>,compact:Arc<str>}
 #[derive(Clone)]
-pub struct Server {sender:mpsc::Sender<RequestMessage>,snapshot:Arc<RwLock<Value>>,events:broadcast::Sender<Published>}
+pub struct Server {sender:mpsc::Sender<RequestMessage>,snapshot:Arc<RwLock<Value>>,events:broadcast::Sender<Published>,full_clients:Arc<std::sync::atomic::AtomicUsize>}
 
 impl Server {
     pub fn launch(files:RunFiles)->Result<Self,String>{
         let (sender,receiver)=mpsc::channel();let (events,_)=broadcast::channel(8);
         let snapshot=Arc::new(RwLock::new(Value::Null));let shared=snapshot.clone();let output=events.clone();
+        let full_clients=Arc::new(std::sync::atomic::AtomicUsize::new(0));let clients=full_clients.clone();
         let (ready_tx,ready_rx)=mpsc::sync_channel(1);
         thread::Builder::new().name("vanguard-simulation".into()).spawn(move ||{
             let mut generation=1_u64;
@@ -42,18 +45,22 @@ impl Server {
             let mut seq=0;
             let mut seconds_per_tick=runtime.core.borrow().config.tick_ms as f64/1000.0;
             let mut next_tick=Instant::now();
-            fn publish(runtime:&Runtime,seconds_per_tick:f64,seq:&mut u64,shared:&RwLock<Value>,events:&broadcast::Sender<Published>){
-                *seq+=1;let mut value=runtime.snapshot();value["seq"]=json!(*seq);value["seconds_per_tick"]=json!(seconds_per_tick);
-                let previous=std::mem::replace(&mut *shared.write().unwrap(),value.clone());
-                let envelope=if previous["run_id"]!=value["run_id"]{
-                    json!({"schema_version":1,"run_id":runtime.run_id,"seq":seq,"tick":value["tick"],"type":"snapshot","snapshot":value})
-                }else{
-                    let delta:value_delta::Delta=value_delta::between(&previous,&value);
-                    json!({"schema_version":1,"run_id":runtime.run_id,"seq":seq,"tick":value["tick"],"type":"update","base_seq":previous["seq"],"delta":delta})
-                };
-                let records=if envelope["type"]=="snapshot"{envelope.clone()}else{json!({"schema_version":1,"run_id":runtime.run_id,"seq":seq,"tick":value["tick"],"type":"update","base_seq":previous["seq"],"patch":crate::projection::between(&previous,&value)})};
-                let _=events.send(Published{seq:*seq,text:envelope.to_string().into(),records:records.to_string().into()});
+            let mut last_full=None;
+            fn projected(runtime:&Runtime,compact:bool,seq:u64,seconds:f64)->Value{let mut value=runtime.projection(compact);value["seq"]=json!(seq);value["seconds_per_tick"]=json!(seconds);value}
+            fn envelope(previous:&Value,value:&Value,records:bool)->Value{
+                if previous["run_id"]!=value["run_id"]{return json!({"schema_version":1,"run_id":value["run_id"],"seq":value["seq"],"tick":value["tick"],"type":"snapshot","snapshot":value});}
+                let mut result=json!({"schema_version":1,"run_id":value["run_id"],"seq":value["seq"],"tick":value["tick"],"type":"update","base_seq":previous["seq"]});
+                if records{result["patch"]=crate::projection::between(previous,value);}else{result["delta"]=json!(value_delta::between(previous,value));}result
             }
+            let mut publish=|runtime:&Runtime,seconds_per_tick:f64,seq:&mut u64,shared:&RwLock<Value>,events:&broadcast::Sender<Published>|{
+                *seq+=1;let value=projected(runtime,true,*seq,seconds_per_tick);
+                let mut shared=shared.write().unwrap();let compact=envelope(&shared,&value,true).to_string().into();*shared=value;drop(shared);
+                let (text,records)=if clients.load(std::sync::atomic::Ordering::SeqCst)>0{
+                    let value=projected(runtime,false,*seq,seconds_per_tick);let empty=Value::Null;let previous=last_full.as_ref().unwrap_or(&empty);
+                    let text=Some(envelope(previous,&value,false).to_string().into());let records=Some(envelope(previous,&value,true).to_string().into());last_full=Some(value);(text,records)
+                }else{last_full=None;(None,None)};
+                let _=events.send(Published{seq:*seq,text,records,compact});
+            };
             publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);let _=ready_tx.send(Ok(()));
             let mut last_publish=Instant::now();
             let mut cache=BTreeMap::<String,Value>::new();let mut cache_order=VecDeque::new();let mut cache_bytes=0;
@@ -73,7 +80,12 @@ impl Server {
                             next_tick=Instant::now()+tick_delay(seconds_per_tick,started.elapsed());
                         }
                     },
-                    Ok(RequestMessage::Command(command,response))=>{
+                    Ok(RequestMessage::Snapshot(response))=>{
+                        publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);last_publish=Instant::now();
+                        let _=response.send(projected(&runtime,false,seq,seconds_per_tick));
+                    },
+                    Ok(RequestMessage::Details(request,response))=>{let _=response.send(runtime.details(&request));},
+                    Ok(RequestMessage::Command(command,compact,response))=>{
                         if let Some(cached)=cache.get(&command.request_id){let _=response.send(cached.clone());continue;}
                         let result=if command.schema_version!=1 {Err("unsupported schema_version".to_string())}
                         else if command.request_id.is_empty()||command.request_id.len()>128 {Err("request_id must be 1..128 bytes".into())}
@@ -108,8 +120,8 @@ impl Server {
                             },
                             _=>Err(format!("invalid transition: {} in {}",command.command,runtime.control)),
                         }};
-                        if command.command!="GetSnapshot" || runtime.control=="RUNNING" {publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);last_publish=Instant::now();}
-                        let value=shared.read().unwrap().clone();
+                        publish(&runtime,seconds_per_tick,&mut seq,&shared,&output);last_publish=Instant::now();
+                        let value=if compact{shared.read().unwrap().clone()}else{projected(&runtime,false,seq,seconds_per_tick)};
                         let reply=json!({"schema_version":1,"run_id":runtime.run_id,"seq":seq,"tick":value["tick"],"type":if result.is_ok(){if command.command=="GetSnapshot"{"snapshot"}else{"ack"}}else{"error"},"request_id":command.request_id,"command":command.command,"error":result.err(),"snapshot":value});
                         let bytes=serde_json::to_vec(&reply).unwrap().len();
                         while !cache_order.is_empty() && (cache_order.len()>=512 || cache_bytes+bytes>16*1024*1024) {
@@ -121,13 +133,20 @@ impl Server {
             }
         }).map_err(|e|e.to_string())?;
         ready_rx.recv().map_err(|e|e.to_string())??;
-        Ok(Self{sender,snapshot,events})
+        Ok(Self{sender,snapshot,events,full_clients})
     }
     pub fn stop(&self){let _=self.sender.send(RequestMessage::Stop);}
     pub fn snapshot(&self)->Value{self.snapshot.read().unwrap().clone()}
+    #[cfg(test)]
     async fn command(&self,command:Command)->Value{
+        self.command_mode(command,false).await
+    }
+    async fn full_snapshot(&self)->Value{
+        let (sender,receiver)=oneshot::channel();if self.sender.send(RequestMessage::Snapshot(sender)).is_err(){return Value::Null;}receiver.await.unwrap_or(Value::Null)
+    }
+    async fn command_mode(&self,command:Command,compact:bool)->Value{
         let (sender,receiver)=oneshot::channel();
-        if self.sender.send(RequestMessage::Command(command,sender)).is_err(){return json!({"schema_version":1,"type":"error","error":"simulation owner stopped"});}
+        if self.sender.send(RequestMessage::Command(command,compact,sender)).is_err(){return json!({"schema_version":1,"type":"error","error":"simulation owner stopped"});}
         receiver.await.unwrap_or_else(|_|json!({"schema_version":1,"type":"error","error":"simulation owner stopped"}))
     }
 }
@@ -150,26 +169,35 @@ impl<'r> FromRequest<'r> for LocalOrigin {
     }
 }
 
-#[rocket::get("/api/snapshot")]
-pub fn snapshot(server:&State<Server>)->Json<Value>{Json(server.snapshot())}
-#[rocket::post("/api/command",format="json",data="<command>")]
-pub async fn command(_origin:LocalOrigin,server:&State<Server>,command:Json<Command>)->Json<Value>{Json(server.command(command.into_inner()).await)}
-#[rocket::get("/api/ws?<records>")]
-pub fn websocket(_origin:LocalOrigin,ws:rocket_ws::WebSocket,server:&State<Server>,records:Option<bool>)->rocket_ws::Channel<'static>{
+#[rocket::get("/api/snapshot?<compact>")]
+pub async fn snapshot(server:&State<Server>,compact:Option<bool>)->Json<Value>{Json(if compact==Some(true){server.snapshot()}else{server.full_snapshot().await})}
+#[rocket::post("/api/command?<compact>",format="json",data="<command>")]
+pub async fn command(_origin:LocalOrigin,server:&State<Server>,command:Json<Command>,compact:Option<bool>)->Json<Value>{Json(server.command_mode(command.into_inner(),compact==Some(true)).await)}
+#[rocket::get("/api/details?<kind>&<id>&<target>&<offset>&<limit>&<run_id>")]
+pub async fn details(_origin:LocalOrigin,server:&State<Server>,kind:String,id:Option<u64>,target:Option<u64>,offset:Option<usize>,limit:Option<usize>,run_id:String)->Json<Value>{
+    let (sender,receiver)=oneshot::channel();let request=Details{kind,id:id.unwrap_or(0),target,offset:offset.unwrap_or(0),limit:limit.unwrap_or(50).clamp(1,100),run_id};
+    if server.sender.send(RequestMessage::Details(request,sender)).is_err(){return Json(Value::Null);}Json(receiver.await.unwrap_or(Value::Null))
+}
+#[rocket::get("/api/ws?<records>&<compact>")]
+pub fn websocket(_origin:LocalOrigin,ws:rocket_ws::WebSocket,server:&State<Server>,records:Option<bool>,compact:Option<bool>)->rocket_ws::Channel<'static>{
     let server=server.inner().clone();
     ws.config(rocket_ws::Config{max_message_size:Some(4096),max_frame_size:Some(4096),..Default::default()}).channel(move |mut stream|Box::pin(async move{
+        let compact=compact==Some(true);
+        struct Client(Option<Arc<std::sync::atomic::AtomicUsize>>);impl Drop for Client{fn drop(&mut self){if let Some(count)=&self.0{count.fetch_sub(1,std::sync::atomic::Ordering::SeqCst);}}}
+        let _client=if compact{Client(None)}else{server.full_clients.fetch_add(1,std::sync::atomic::Ordering::SeqCst);Client(Some(server.full_clients.clone()))};
         // Subscribe before projection, then discard events at/below its watermark.
-        let mut updates=server.events.subscribe();let snapshot=server.snapshot();let mut watermark=snapshot["seq"].as_u64().unwrap_or(0);
+        let mut updates=server.events.subscribe();let snapshot=if compact{server.snapshot()}else{server.full_snapshot().await};let mut watermark=snapshot["seq"].as_u64().unwrap_or(0);
         stream.send(rocket_ws::Message::Text(json!({"schema_version":1,"run_id":snapshot["run_id"],"seq":watermark,"tick":snapshot["tick"],"type":"snapshot","snapshot":snapshot}).to_string())).await?;
         loop {rocket::tokio::select!{
             update=updates.recv()=>{
-                let value=match update{Ok(value)=>value,Err(broadcast::error::RecvError::Lagged(_))=>{let s=server.snapshot();let text:Arc<str>=json!({"schema_version":1,"run_id":s["run_id"],"seq":s["seq"],"tick":s["tick"],"type":"snapshot","snapshot":s}).to_string().into();Published{seq:s["seq"].as_u64().unwrap_or(0),records:text.clone(),text}},Err(_)=>break};
+                let value=match update{Ok(value)=>value,Err(broadcast::error::RecvError::Lagged(_))=>{let s=if compact{server.snapshot()}else{server.full_snapshot().await};let text:Arc<str>=json!({"schema_version":1,"run_id":s["run_id"],"seq":s["seq"],"tick":s["tick"],"type":"snapshot","snapshot":s}).to_string().into();Published{seq:s["seq"].as_u64().unwrap_or(0),records:Some(text.clone()),text:Some(text.clone()),compact:text}},Err(_)=>break};
                 if value.seq<=watermark{continue;}watermark=value.seq;
-                stream.send(rocket_ws::Message::Text(if records==Some(true){value.records}else{value.text}.to_string())).await?;
+                let text=if compact{Some(value.compact)}else if records==Some(true){value.records}else{value.text};
+                if let Some(text)=text{stream.send(rocket_ws::Message::Text(text.to_string())).await?;}
             },
             incoming=stream.next()=>{match incoming{
                 Some(Ok(rocket_ws::Message::Text(text)))=>{
-                    let reply=match serde_json::from_str::<Command>(&text){Ok(command)=>server.command(command).await,Err(error)=>{let snapshot=server.snapshot();json!({"schema_version":1,"run_id":snapshot["run_id"],"seq":snapshot["seq"],"tick":snapshot["tick"],"type":"error","error":format!("invalid command: {error}")})}};
+                    let reply=match serde_json::from_str::<Command>(&text){Ok(command)=>server.command_mode(command,compact).await,Err(error)=>{let snapshot=server.snapshot();json!({"schema_version":1,"run_id":snapshot["run_id"],"seq":snapshot["seq"],"tick":snapshot["tick"],"type":"error","error":format!("invalid command: {error}")})}};
                     stream.send(rocket_ws::Message::Text(reply.to_string())).await?;
                 },Some(Ok(rocket_ws::Message::Ping(bytes)))=>{stream.send(rocket_ws::Message::Pong(bytes)).await?;},Some(Ok(rocket_ws::Message::Close(_)))|None=>break,Some(Err(error))=>return Err(error),_=>{},
             }}

@@ -120,7 +120,7 @@ impl Config {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(default)]
 pub struct Node {
     pub id: u64,
@@ -147,7 +147,14 @@ impl Node {
 #[derive(Serialize, Clone, Debug)]
 pub struct AgentState {
     pub id: u64, pub router_id: u64, pub fuel: u64, pub last_fuel: u64,
-    pub known: BTreeSet<u64>, pub observations: Vec<Value>,
+    pub known: BTreeSet<u64>, pub observations: Vec<Observation>,
+}
+#[derive(Serialize,Clone,Debug)]
+pub struct Observation {
+    #[serde(flatten)]
+    pub result:std::sync::Arc<Value>,
+    pub observed_at:u64,
+    pub source:String,
 }
 #[derive(Serialize, Clone, Debug)]
 pub struct Job {
@@ -158,7 +165,7 @@ pub struct Job {
     pub peer: Option<u64>, pub state: String, pub started_at: u64,
     #[serde(skip_serializing_if="Option::is_none")]
     pub finished_at: Option<u64>,
-    pub fuel_spent: u64, pub duration: u64, pub result: Option<Value>, pub failure: Option<String>,
+    pub fuel_spent: u64, pub duration: u64, pub result: Option<std::sync::Arc<Value>>, pub failure: Option<String>,
     #[serde(skip)]
     entered: bool,
     #[serde(skip)]
@@ -227,8 +234,10 @@ pub struct Core {
     exposure_by_target:BTreeMap<u64,u64>,
     session_by_pair:BTreeMap<(u64,u64),u64>,
     sessions_by_host:BTreeMap<u64,BTreeSet<u64>>,
+    compact_scenario:Value,
 }
 impl Core {
+    pub const SNAPSHOT_FIELDS:[&str;13]=["agents","attack_attempts","enemy_updates","events","history","host_activity","jobs","links","nodes","scenario","score","successful_connections","tick"];
     pub fn new(config: Config) -> Result<Self,String> {
         config.validate()?;
         let mut ns = config.topology();
@@ -247,8 +256,12 @@ impl Core {
         }
         let rng = if config.seed == 0 { 0x9e3779b97f4a7c15 } else { config.seed };
         let scored=config.mission.as_ref().is_some_and(|m|m.enabled);
+        let mut compact_scenario=serde_json::to_value(&config).unwrap();
+        compact_scenario["nodes"]=Value::Null;compact_scenario["router_edges"]=Value::Null;
+        if let Some(mission)=compact_scenario["mission"].as_object_mut(){mission.remove("services");}
+        compact_scenario["tick_cost"]=action_registry();
         let mut core=Self {score:None,config,tick:0,nodes:ns.into_iter().map(|n|(n.id,n)).collect(),agents,jobs:BTreeMap::new(),events:VecDeque::new(),sequence:0,
-            sessions:BTreeMap::new(),session_by_pair:BTreeMap::new(),sessions_by_host:BTreeMap::new(),edges,history:BTreeMap::new(),submissions:BTreeMap::new(),attacks:BTreeMap::new(),rng,session_sequence:0,task_sequence:0,enemy_updates:0,attack_attempts:0,successful_connections:0,host_attempts:BTreeMap::new(),host_connections:BTreeMap::new(),routing,hosts_by_router,running_by_router:BTreeMap::new(),mutation_locks:BTreeMap::new(),exposure_by_target:BTreeMap::new()};
+            sessions:BTreeMap::new(),session_by_pair:BTreeMap::new(),sessions_by_host:BTreeMap::new(),edges,history:BTreeMap::new(),submissions:BTreeMap::new(),attacks:BTreeMap::new(),rng,session_sequence:0,task_sequence:0,enemy_updates:0,attack_attempts:0,successful_connections:0,host_attempts:BTreeMap::new(),host_connections:BTreeMap::new(),routing,hosts_by_router,running_by_router:BTreeMap::new(),mutation_locks:BTreeMap::new(),exposure_by_target:BTreeMap::new(),compact_scenario};
         if scored {core.score=Some(crate::scoring::Score::new(&core));}
         Ok(core)
     }
@@ -340,7 +353,7 @@ impl Core {
                 let j=j.ok_or_else(||err("UNKNOWN_TASK"))?;
                 if method=="status" { let mut v=serde_json::to_value(j).unwrap(); v.as_object_mut().unwrap().remove("result"); return Ok(v); }
                 if let Some(f)=&j.failure {return Err(f.clone());}
-                j.result.clone().ok_or_else(||err("TASK_NOT_FINISHED"))
+                j.result.as_deref().cloned().ok_or_else(||err("TASK_NOT_FINISHED"))
             }
             _ => Err(err("INVALID_ARGUMENT")),
         }
@@ -357,6 +370,9 @@ impl Core {
         path.reverse();Some(path)
     }
     pub fn traffic_allowed(&self, source: u64, target: u64) -> bool {
+        self.traffic_permission(source,target,false)
+    }
+    fn traffic_permission(&self,source:u64,target:u64,source_checked:bool)->bool {
         let (Some(a),Some(b))=(self.nodes.get(&source),self.nodes.get(&target)) else {return false;};
         if source==target || a.kind=="ROUTER" || b.kind=="ROUTER" || a.power!="ONLINE" || b.power!="ONLINE" || !a.allows(target) || !b.allows(source) {return false;}
         if a.router_id==b.router_id{return true;}
@@ -364,10 +380,16 @@ impl Core {
         if self.routing.parents[start][current]==usize::MAX{return false;}
         loop {
             let router=&self.nodes[&self.routing.routers[current]];
-            if !router.allows(source)||!router.allows(target){return false;}
+            if (!source_checked&&!router.allows(source))||!router.allows(target){return false;}
             if current==start{return true;}
             current=self.routing.parents[start][current];
         }
+    }
+    fn source_route_allowed(&self,source:u64,target_router:u64)->bool{
+        let router=self.nodes[&source].router_id;if router==target_router{return true;}
+        let start=self.routing.index[&router];let mut current=self.routing.index[&target_router];
+        if self.routing.parents[start][current]==usize::MAX{return false;}
+        loop{if !self.nodes[&self.routing.routers[current]].allows(source){return false;}if current==start{return true;}current=self.routing.parents[start][current];}
     }
     pub fn communicate(&mut self, source:u64,target:u64) -> Option<u64> {
         if !self.traffic_allowed(source,target) {return None;}
@@ -456,13 +478,15 @@ impl Core {
         // A single sorted boundary inventory; target permission stays live and
         // claimed hosts are excluded per source. Preserve RNG candidate order.
         let eligible:Vec<_>=self.nodes.values().filter(|n|n.kind!="ROUTER"&&!n.compromised&&n.power=="ONLINE"&&!n.isolated).map(|n|n.id).collect();
+        let restricted_routers=self.routing.routers.iter().filter_map(|id|{let node=&self.nodes[id];(node.isolated||node.policy!="DEFAULT_ALLOW"||!node.exceptions.is_empty()).then(||node.clone())}).collect::<Vec<_>>();
         for source in sources {
             let mut selected=active_by_source.remove(&source).unwrap_or_default();
             selected.truncate(self.config.attack_slots);
             // Existing sessions already occupy their slots. Avoid a full-world
             // candidate pass unless this source actually needs a replacement.
             if selected.len()<self.config.attack_slots && !self.nodes[&source].isolated {
-                let mut candidates:Vec<_>=eligible.iter().copied().filter(|id|!claimed.contains(id)&&self.traffic_allowed(source,*id)).collect();
+                let source_routes=restricted_routers.iter().any(|router|!router.allows(source)).then(||self.routing.routers.iter().map(|router|(*router,self.source_route_allowed(source,*router))).collect::<BTreeMap<_,_>>());
+                let mut candidates:Vec<_>=eligible.iter().copied().filter(|id|!claimed.contains(id)&&source_routes.as_ref().is_none_or(|routes|routes[&self.nodes[id].router_id])&&self.traffic_permission(source,*id,true)).collect();
                 while selected.len()<self.config.attack_slots&&!candidates.is_empty() {let i=(self.random() % candidates.len() as u64) as usize;let target=candidates.remove(i);claimed.insert(target);selected.push(target);}
             }
             for target in selected {
@@ -489,7 +513,8 @@ impl Core {
                 j.state="COMPLETED".into();
                 let mut result=json!({"task_id":j.id,"action":j.action,"router_id":j.router_id,"started_at":j.started_at,"finished_at":self.tick,"fuel_spent":j.fuel_spent,"data":data});
                 if let Some(t)=j.target {result["target"]=json!(t);}
-                if readonly(&j.action) {let mut observation=result.clone();observation["observed_at"]=json!(self.tick);observation["source"]=json!(j.source);self.agents.get_mut(&j.agent_id).unwrap().observations.push(observation);}
+                let result=std::sync::Arc::new(result);
+                if readonly(&j.action) {self.agents.get_mut(&j.agent_id).unwrap().observations.push(Observation{result:result.clone(),observed_at:self.tick,source:j.source.clone()});}
                 j.result=Some(result);
             }
             Err(f)=>{j.state="FAILED".into();j.failure=Some(f);if matches!(j.action.as_str(),"STARTUP"|"RESTORE") {self.nodes.get_mut(&j.target.unwrap()).unwrap().power="OFFLINE".into();}}
@@ -527,20 +552,29 @@ impl Core {
     }
     pub(crate) fn has_exposure(&self)->bool { !self.attacks.is_empty() }
     pub fn snapshot(&self)->Value {
-        let mut scenario=serde_json::to_value(&self.config).unwrap();scenario["tick_cost"]=action_registry();
-        scenario["rng_state"]=json!(self.rng.to_string());
-        scenario["seed"]=json!(self.config.seed.to_string());
-        let mut links:Vec<_>=self.edges.iter().map(|&(source,target)|json!({"source":source,"target":target})).collect();
-        links.extend(self.nodes.values().filter(|n|n.kind!="ROUTER").map(|n|json!({"source":n.router_id,"target":n.id})));
-        let nodes:Vec<_>=self.nodes.values().map(|node|{let mut value=serde_json::to_value(node).unwrap();let age=self.exposure_by_target.get(&node.id).copied().unwrap_or(0);value["exposure"]=if age>0{json!({"age":age,"started_at":self.tick.saturating_sub(age)+1})}else{Value::Null};value["infection"]=json!(if node.kind=="ROUTER"{"IMMUNE"}else if node.compromised{"COMPROMISED"}else if age>0{"IN_DANGER"}else{"HEALTHY"});value["health"]=if node.kind=="ROUTER"{Value::Null}else if node.compromised{json!(0)}else if age>0{json!((5*(self.config.infection_intervals-age)).div_ceil(self.config.infection_intervals).clamp(1,5))}else{json!(5)};value}).collect();
-        let sessions:Vec<_>=self.sessions.values().map(|s|{let mut value=serde_json::to_value(s).unwrap();value["route"]=json!(self.route(s.source,s.target));value}).collect();
-        json!({"tick":self.tick,"scenario":scenario,"nodes":nodes,"links":links,
-            "score":self.score.as_ref().map(|s|s.snapshot(self)).unwrap_or(json!({"enabled":false,"outcome":"PRACTICE"})),
-            "sessions":sessions,"jobs":self.jobs.values().collect::<Vec<_>>(),
-            "enemy_updates":self.enemy_updates,"attack_attempts":self.attack_attempts,"successful_connections":self.successful_connections,
-            "host_activity":self.host_attempts.iter().map(|(host,attempts)|json!({"host_id":host,"attack_attempts":attempts,"successful_connections":self.host_connections.get(host).copied().unwrap_or(0)})).collect::<Vec<_>>(),
-            "history":{"first_seq":self.events.front().map_or(self.sequence+1,|e|e.sequence),"evicted":self.sequence.saturating_sub(self.events.len() as u64)},
-            "agents":self.agents.values().collect::<Vec<_>>(),"events":self.events})
+        self.projection(false)
+    }
+    pub fn projection(&self,compact:bool)->Value{
+        let mut map=serde_json::Map::new();
+        for key in Self::SNAPSHOT_FIELDS.into_iter().chain(["sessions"]){map.insert(key.into(),self.snapshot_field(key,compact));}Value::Object(map)
+    }
+    pub fn snapshot_field(&self,key:&str,compact:bool)->Value{
+        match key {
+            "tick"=>json!(self.tick),"enemy_updates"=>json!(self.enemy_updates),"attack_attempts"=>json!(self.attack_attempts),"successful_connections"=>json!(self.successful_connections),
+            "events"=>json!(self.events),
+            "history"=>json!({"first_seq":self.events.front().map_or(self.sequence+1,|e|e.sequence),"evicted":self.sequence.saturating_sub(self.events.len() as u64)}),
+            "host_activity"=>json!(self.host_attempts.iter().map(|(host,attempts)|json!({"host_id":host,"attack_attempts":attempts,"successful_connections":self.host_connections.get(host).copied().unwrap_or(0)})).collect::<Vec<_>>()),
+            "agents" if compact=>json!(self.agents.values().map(|a|json!({"id":a.id,"router_id":a.router_id,"fuel":a.fuel,"last_fuel":a.last_fuel,"known":a.known,"observations":[],"observation_count":a.observations.len()})).collect::<Vec<_>>()),
+            "agents"=>json!(self.agents.values().collect::<Vec<_>>()),
+            "jobs" if compact=>json!(self.jobs.values().map(|j|{let mut value=json!({"id":j.id,"agent_id":j.agent_id,"router_id":j.router_id,"source":j.source,"action":j.action,"peer":j.peer,"state":j.state,"started_at":j.started_at,"fuel_spent":j.fuel_spent,"duration":j.duration,"failure":j.failure});if let Some(target)=j.target{value["target"]=json!(target);}if let Some(finished)=j.finished_at{value["finished_at"]=json!(finished);}value}).collect::<Vec<_>>()),
+            "jobs"=>json!(self.jobs.values().collect::<Vec<_>>()),
+            "score"=>self.score.as_ref().map(|s|if compact{s.projection(self,true)}else{s.snapshot(self)}).unwrap_or(json!({"enabled":false,"outcome":"PRACTICE"})),
+            "links"=>{let mut links:Vec<_>=self.edges.iter().map(|&(source,target)|json!({"source":source,"target":target})).collect();if !compact{links.extend(self.nodes.values().filter(|n|n.kind!="ROUTER").map(|n|json!({"source":n.router_id,"target":n.id})));}json!(links)},
+            "sessions"=>json!(self.sessions.values().map(|s|{let mut value=serde_json::to_value(s).unwrap();value["route"]=json!(self.route(s.source,s.target));value}).collect::<Vec<_>>()),
+            "scenario"=>{let mut scenario=if compact{self.compact_scenario.clone()}else{let mut value=serde_json::to_value(&self.config).unwrap();value["tick_cost"]=action_registry();value};scenario["rng_state"]=json!(self.rng.to_string());scenario["seed"]=json!(self.config.seed.to_string());scenario},
+            "nodes"=>json!(self.nodes.values().map(|node|{let mut value=serde_json::to_value(node).unwrap();let age=self.exposure_by_target.get(&node.id).copied().unwrap_or(0);value["exposure"]=if age>0{json!({"age":age,"started_at":self.tick.saturating_sub(age)+1})}else{Value::Null};value["infection"]=json!(if node.kind=="ROUTER"{"IMMUNE"}else if node.compromised{"COMPROMISED"}else if age>0{"IN_DANGER"}else{"HEALTHY"});value["health"]=if node.kind=="ROUTER"{Value::Null}else if node.compromised{json!(0)}else if age>0{json!((5*(self.config.infection_intervals-age)).div_ceil(self.config.infection_intervals).clamp(1,5))}else{json!(5)};value}).collect::<Vec<_>>()),
+            _=>Value::Null,
+        }
     }
 }
 

@@ -1,6 +1,10 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import type { Snapshot } from './types';
 	import JsonTree from './JsonTree.svelte';
+	import { loadDetails } from './details';
+	import { inventory } from './inventory';
+	import Jobs from './Jobs.svelte';
 	import { Monitor, Server, Network, ArrowUpRight, ArrowDownLeft, MoveRight } from '@lucide/svelte';
 	let { snapshot, selected, onselect }: { snapshot: Snapshot | null; selected: number | null; onselect: (id: number) => void } = $props();
 	let view = $state('Truth');
@@ -8,12 +12,16 @@
 	let connectionPage = $state(0);
 	let observationPage = $state(0);
 	let runId = $derived(snapshot?.run_id);
-	let byId = $derived(new Map((snapshot?.nodes??[]).map(n=>[n.id,n])));
+	let isCompact=$derived(!!snapshot?.compact);
+	let remote=$state.raw<{items:any[];total:number}|null>(null);let loading=$state(false);let detailError=$state('');
+	let byId = $derived(inventory(snapshot?.nodes??[]).byId);
 	let node = $derived(selected===null?undefined:byId.get(selected));
 	let owner = $derived(snapshot?.agents.find(a => a.router_id === node?.router_id));
+	$effect(()=>{selected;runId;untrack(()=>{agent=owner?String(owner.id):'';});});
 	let observer = $derived(snapshot?.agents.find(a => String(a.id) === agent));
 	let known = $derived(!!observer && selected !== null && observer.known.includes(selected));
 	let connections=$derived(snapshot?.sessions.filter(s=>s.source===selected||s.target===selected||s.route?.includes(selected))??[]);
+	let runningJobs=$derived(snapshot?.jobs.filter(j=>j.router_id===node?.id&&j.state==='RUNNING')??[]);
 	function hostName(id:number){const peer=byId.get(id);return `${peer?.type==='ROUTER'?'Router':peer?.type==='SERVER'?'Server':'Host'} ${id}`;}
 	let observations = $derived((view==='Discovered'?observer?.observations ?? []:[]).filter(o => {
 		const data = o.data ?? {};
@@ -22,12 +30,25 @@
 			|| (data.pairs ?? []).some((p:any) => p.a === selected || p.b === selected)
 			|| (data.connections ?? []).some((c:any) => c.peer === selected);
 	}));
+	let observationCount=$derived(isCompact?(remote?.total??0):observations.length);
+	let visibleObservations=$derived(isCompact?(remote?.items??[]):observations.slice(observationPage*50,(observationPage+1)*50));
+	let observerCount=$derived(observer?.observation_count);
+	let observerId=$derived(observer?.id);
+	$effect(()=>{
+		const run=runId,id=observerId,target=selected,offset=observationPage*50;observerCount;
+		remote=null;loading=false;detailError='';
+		if(!isCompact||view!=='Discovered'||!run||!id||target===null)return;
+		const controller=new AbortController();loading=true;
+		void loadDetails(run,'observations',id,controller.signal,offset,target).then(value=>{remote=value;loading=false;}).catch(error=>{if(!controller.signal.aborted){detailError=error.message;loading=false;}});
+		return()=>controller.abort();
+	});
 	$effect(()=>{selected;agent;runId;connectionPage=0;observationPage=0;});
-	$effect(()=>{if(connectionPage*100>=connections.length)connectionPage=0;if(observationPage*50>=observations.length)observationPage=0;});
+	$effect(()=>{if(connectionPage*100>=connections.length)connectionPage=0;if(!isCompact&&observationPage*50>=observations.length)observationPage=0;});
 </script>
 {#if node}<div class="selected-node"><div class="node-icon">{#if node.type==='ROUTER'}<Network size={24}/>{:else if node.type==='SERVER'}<Server size={24}/>{:else}<Monitor size={24}/>{/if}</div><div><h3>{node.type === 'ROUTER' ? 'Router' : node.type === 'SERVER' ? 'Server' : 'Workstation'} {node.id}</h3><small>LAN {node.lan_id ?? node.router_id} / ROUTER R{node.router_id}</small></div></div>{/if}
 <div class="tabs" aria-label="Node visibility"><button aria-pressed={view === 'Truth'} onclick={() => view = 'Truth'}>True state</button><button aria-pressed={view === 'Discovered'} onclick={() => view = 'Discovered'}>Discovered</button></div>
 <div class="node-content">
+	{#if node?.type==='ROUTER'}<section class="inspector-section router-task-section"><h4>RUNNING JOBS <span>{runningJobs.length} / 5 slots</span></h4><p class="muted">A{owner?.id??'?'} · Select a job for its descriptor and result.</p><Jobs {snapshot} agent={String(owner?.id??'')} compact cards/></section>{/if}
 	{#if view === 'Truth' && node}
 		<div class="state-banner" class:danger={node.exposure!=null} class:infected={node.compromised}><strong>● {node.infection === 'IN_DANGER' ? 'IN DANGER' : node.infection ?? (node.type === 'ROUTER' ? 'IMMUNE' : 'HEALTHY')}</strong><small>LIVE TRUTH</small></div>
 		<div class="integrity-label">{node.type === 'ROUTER' ? 'Router integrity' : 'Host integrity'}<span>{node.type === 'ROUTER' ? 'N/A' : `${node.health ?? '?'} / 5`}</span></div><div class="integrity" class:danger={node.exposure!=null} class:infected={node.compromised}>{#each [1,2,3,4,5] as segment}<i class:empty={node.type==='ROUTER'||segment>(node.health??0)}></i>{/each}</div>
@@ -45,6 +66,6 @@
 		</section>
 	{:else if view === 'Discovered'}
 		<label class="observer-label">Vanguard perspective<select bind:value={agent} aria-label="Discovered Vanguard filter"><option value="">Choose Vanguard</option>{#each snapshot?.agents??[] as a}<option value={String(a.id)}>A{a.id} · R{a.router_id}</option>{/each}</select></label><p class="inspector-note">Recorded observations only. Missing fields stay unknown; older scans may be stale.</p>
-		{#if !observer}<p class="empty">Choose a Vanguard to inspect its knowledge.</p>{:else if !known}<p class="empty">Undiscovered by A{observer.id}.</p>{:else}{#each observations.slice(observationPage*50,(observationPage+1)*50) as o,index (`${o.task_id}-${index}`)}<article class="observation"><header>{o.action} · T{o.observed_at ?? o.finished_at} · Task #{o.task_id}</header><p class="muted">{Math.max(0,(snapshot?.tick??0)-(o.observed_at??o.finished_at))} ticks ago</p><JsonTree value={o} /></article>{:else}<p class="empty">ID known. No recorded scan details for this node.</p>{/each}{#if observations.length>50}<div class="table-pagination" aria-label="Observation pages"><button disabled={observationPage===0} onclick={()=>observationPage--}>Previous observations</button><span>{observationPage*50+1}–{Math.min((observationPage+1)*50,observations.length)} / {observations.length}</span><button disabled={(observationPage+1)*50>=observations.length} onclick={()=>observationPage++}>Next observations</button></div>{/if}{/if}
+		{#if !observer}<p class="empty">Choose a Vanguard to inspect its knowledge.</p>{:else if !known}<p class="empty">Undiscovered by A{observer.id}.</p>{:else if loading}<p class="empty">Loading recorded observations…</p>{:else if detailError}<p role="alert">{detailError}</p>{:else}{#each visibleObservations as o,index (`${o.task_id}-${index}`)}<article class="observation"><header>{o.action} · T{o.observed_at ?? o.finished_at} · Task #{o.task_id}</header><p class="muted">{Math.max(0,(snapshot?.tick??0)-(o.observed_at??o.finished_at))} ticks ago</p><JsonTree value={o} /></article>{:else}<p class="empty">ID known. No recorded scan details for this node.</p>{/each}{#if observationCount>50}<div class="table-pagination" aria-label="Observation pages"><button disabled={observationPage===0} onclick={()=>observationPage--}>Previous observations</button><span>{observationPage*50+1}–{Math.min((observationPage+1)*50,observationCount)} / {observationCount}</span><button disabled={(observationPage+1)*50>=observationCount} onclick={()=>observationPage++}>Next observations</button></div>{/if}{/if}
 	{:else}<p class="empty">Select a node to inspect.</p>{/if}
 </div>

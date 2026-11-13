@@ -1,5 +1,42 @@
 # Simulation decisions
 
+## Incremental evaluation and inspection projections (2026-11-12)
+
+Router cohorts reuse eight native workers across ticks, retaining the existing
+sorted cohort and round-robin admission order. Every accepted work item rejoins
+before the barrier, including error paths; Restart drops and joins the old pool.
+The scheduler identity and semantic state remain unchanged.
+
+Required services cache their working flags against endpoint and static-route
+router dependencies. Changed node power, compromise, isolation, policy or exception
+sets invalidate affected pairs; broad invalidations use a dense pass. Large dense
+and sparse evaluations share a reusable eight-thread read-only service pool;
+indexed results join in source order before score accounting. Source-side
+router permissions are also checked once per source/destination LAN during enemy
+candidate enumeration when a router actually rejects that source. Unrestricted
+source routes bypass cache construction; target-side and power checks remain live.
+
+The browser requests `compact=true` on snapshots, commands and record sockets.
+Compact projections omit duplicate topology/service configuration, per-service
+flags, historical job results and observation bodies. Jobs retain lifecycle and
+descriptor metadata; agents publish observation counts. `/api/details` retrieves
+job results, paginated observations (optionally scoped to a node) or full scenario
+configuration, and rejects stale run IDs. Unparameterized clients retain full
+projections; their socket formats are constructed only while full clients exist.
+Compact full snapshots remain the resynchronization mechanism for modern clients.
+
+Job results and observations share immutable retained payloads. Hashing writes
+canonical top-level fields in sorted order to the buffered digest without building
+the complete enriched snapshot; individual fields still use JSON values. This is
+field-bounded serialization, not fully allocation-free direct state serialization.
+
+Topology preserves the operator's zoom/pan across tick membership updates and fits
+on scope entry or explicit Fit. Long IDs receive width-aware cells, status appears
+on a separate line, and LAN headings are centered inside their groups. Router
+selection exposes running jobs and defaults discovered perspective to its owner.
+Globe offers button, wheel and keyboard zoom (65–280%), and caches stationary
+camera land/grid rendering and projected flow paths.
+
 ## Stop on verified victory (2026-11-12)
 
 This supersedes the fixed-deadline continuation rule below. Scored matches end at

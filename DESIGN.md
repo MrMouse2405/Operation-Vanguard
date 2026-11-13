@@ -158,7 +158,19 @@ The top-right account block, icon rail, global footer, list footer and promotion
 
 The optional dbgguard comparison expands above the host summary. Two labelled perspective selectors, update ticks, paginated drawings, view notes and expandable node/edge metadata use the existing slate system. Each graph renders 80 nodes per page; phone layouts stack panes and use four graph columns. The comparison scrolls within 55dvh; the rest of the dashboard retains an operational-height explorer below it. This view labels all content as agent-authored claims and never implies invented metadata is engine truth.
 
-Connections detail groups hosts by LAN. Below a graph-container width of (500px), LAN groups stack vertically and use fewer columns with larger node labels. Automatic Fit clamps its narrow-screen zoom to at least (0.85) and centers the selected node (or first node), keeping larger neighborhoods pannable rather than shrinking everything to fit. Manual zoom remains available.
+Connections detail groups hosts by LAN. Below a graph-container width of (500px), LAN groups stack vertically and use fewer columns with larger node labels. Automatic Fit clamps its narrow-screen zoom to at least (0.85) and places the selected node (or first node) near the top, keeping larger neighborhoods pannable rather than shrinking everything to fit. Manual zoom remains available.
+
+Topology reserves at least 112 model pixels per label cell, increasing for long
+IDs and phone typography, with 112-pixel row spacing. Power/isolation status wraps
+below the ID; LAN headings sit centered inside their bounds. Labels have an opaque
+slate backing to separate them from crossing flows; unreadably small unselected
+labels hide below seven rendered pixels. Live updates preserve zoom/pan; automatic
+Fit runs only on scope entry. Explicit phone Fit puts the selected/first node near
+the top of the canvas, leaving room for its hosts below. Activity filters, active
+hosts only and Focus selection support diagnosis. Router inspection includes
+clickable running-job cards, slot usage and the owning discovered perspective.
+Globe zoom has visible +/- controls, percentage, wheel/trackpad and keyboard input,
+with a 65–280% range and Reset camera.
 
 ## Elevation & Depth
 

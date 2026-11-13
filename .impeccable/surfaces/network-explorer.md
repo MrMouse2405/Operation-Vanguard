@@ -40,6 +40,11 @@ At most 160 arcs; reserve capacity for host sessions so tasks cannot hide them.
 Draw at most 30fps while visible, with reduced-motion and paused-state support.
 TOPOLOGY ACTIVITY: Directional, animated dashed arrows distinguish router tasks
 from live host connections. Show current LAN activity before selecting a node.
+Preserve zoom/pan across live membership changes. Reserve width-aware label cells,
+put power/isolation below IDs and center LAN headings within their boundaries.
+Router selection shows running-job cards and defaults discovered evidence to its
+own Vanguard; activity filters and Focus selection stay local to the map.
+Globe supports visible zoom buttons, percentage, wheel and keyboard input.
 TELEMETRY: Jobs and Tasks share one Jobs view with counts and All / Running /
 Completed / Failed filters. Completed task results remain inspectable.
 PERFORMANCE: Closed dialogs and collapsed JSON mount no descendants. JSON and jobs/

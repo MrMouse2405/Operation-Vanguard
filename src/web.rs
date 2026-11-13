@@ -53,7 +53,7 @@ fn app(files: crate::network::RunFiles, port: u16) -> Result<Rocket<Build>, Stri
         .merge(("log_level", "off"));
     Ok(rocket::custom(config)
         .manage(simulation)
-        .mount("/", routes![health, index, files, crate::server::snapshot, crate::server::command, crate::server::websocket])
+        .mount("/", routes![health, index, files, crate::server::snapshot, crate::server::command, crate::server::details, crate::server::websocket])
         .attach(AdHoc::on_shutdown("Stop simulation", move |_| Box::pin(async move {
             stop_simulation.stop();
         })))

@@ -492,8 +492,39 @@ pub struct Runtime {
     debug: Shared<crate::debug::Store>,
     gate: Arc<Gate>,
     vms: BTreeMap<u64,Vm>,
+    workers:WorkerPool,
     pub control: String,
     pub run_id: String,
+}
+
+struct Work {vm:Vm,core:Shared<Core>,gate:Arc<Gate>,tick:u64,limits:VmLimits}
+struct WorkerPool {
+    senders:Vec<std::sync::mpsc::Sender<Work>>,
+    completed:std::sync::mpsc::Receiver<(Vm,Result<(),String>)>,
+    threads:Vec<std::thread::JoinHandle<()>>,
+}
+impl WorkerPool {
+    fn new()->Result<Self,String>{
+        let (completed,receiver)=std::sync::mpsc::channel();
+        let mut pool=Self{senders:vec![],completed:receiver,threads:vec![]};
+        for index in 0..VM_COHORT {
+            let (sender,work)=std::sync::mpsc::channel::<Work>();let completed=completed.clone();
+            let thread=std::thread::Builder::new().name(format!("vanguard-worker-{index}")).spawn(move||{
+                while let Ok(mut job)=work.recv(){
+                    let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+                        let _participant=Participant{gate:job.gate.clone(),id:job.vm.id};
+                        Runtime::step_vm(&mut job.vm,&job.core,&job.gate,job.tick,&job.limits)
+                    })).unwrap_or_else(|_|Err("agent worker panicked".into()));
+                    if completed.send((job.vm,result)).is_err(){break;}
+                }
+            }).map_err(|error|format!("could not start agent worker: {error}"))?;
+            pool.senders.push(sender);pool.threads.push(thread);
+        }
+        Ok(pool)
+    }
+}
+impl Drop for WorkerPool {
+    fn drop(&mut self){self.senders.clear();for thread in self.threads.drain(..){let _=thread.join();}}
 }
 
 #[cfg(test)]
@@ -508,36 +539,28 @@ impl Runtime {
         let mut vms=BTreeMap::new();
         let debug=Shared::new(crate::debug::Store::default());let gate=Arc::new(Gate::default());
         for (id,router) in agents {vms.insert(id,Vm::new(id,router,core.clone(),bus.clone(),debug.clone(),gate.clone(),&staged)?);}
-        Ok(Self{core,bus,debug,gate,vms,control:"READY".into(),run_id})
+        let workers=WorkerPool::new()?;
+        Ok(Self{core,bus,debug,gate,vms,workers,control:"READY".into(),run_id})
     }
     pub fn step(&mut self)->Result<(),String>{
         if self.control=="FINISHED" {return Ok(());}
         let tick=self.core.borrow().tick;let config=VmLimits::from(&self.core.borrow().config);
-        let mut vms=self.vms.values_mut().collect::<Vec<_>>();
-        for cohort in vms.chunks_mut(VM_COHORT) {
-            self.gate.reset(cohort.iter().map(|vm|vm.id));
-            std::thread::scope(|scope|->Result<(),String>{
-                let mut workers=Vec::new();let mut failure=None;
-                let ids=cohort.iter().map(|vm|vm.id).collect::<Vec<_>>();
-                for (index,vm) in cohort.iter_mut().enumerate() {
-                    let core=self.core.clone();let gate=self.gate.clone();let config=&config;
-                    let worker=std::thread::Builder::new().name(format!("vanguard-agent-{}",vm.id)).spawn_scoped(scope,move || {
-                        let _participant=Participant{gate:gate.clone(),id:vm.id};
-                        Self::step_vm(vm,&core,&gate,tick,config)
-                    });
-                    match worker {
-                        Ok(worker)=>workers.push(worker),
-                        Err(error)=>{
-                            for id in &ids[index..]{self.gate.advance(*id,true);}
-                            failure=Some(format!("could not start agent worker: {error}"));break;
-                        }
-                    }
+        let ids=self.vms.keys().copied().collect::<Vec<_>>();
+        for cohort in ids.chunks(VM_COHORT) {
+            self.gate.reset(cohort.iter().copied());let mut sent=0;let mut failure=None;
+            for (index,id) in cohort.iter().enumerate(){
+                let vm=self.vms.remove(id).unwrap();
+                let work=Work{vm,core:self.core.clone(),gate:self.gate.clone(),tick,limits:config};
+                if let Err(error)=self.workers.senders[index].send(work){
+                    self.vms.insert(*id,error.0.vm);for id in &cohort[index..]{self.gate.advance(*id,true);}
+                    failure=Some("agent worker disconnected".to_string());break;
                 }
-                for worker in workers {
-                    match worker.join(){Ok(Ok(()))=>{},Ok(Err(e))=>{failure.get_or_insert(e);},Err(_)=>{failure.get_or_insert("agent worker panicked".into());}}
-                }
-                failure.map_or(Ok(()),Err)
-            })?;
+                sent+=1;
+            }
+            // Collect every accepted worker before returning errors or crossing
+            // the barrier. Returned VMs retain private state and sorted IDs.
+            for _ in 0..sent{let (vm,result)=self.workers.completed.recv().map_err(|_|"agent workers disconnected")?;self.vms.insert(vm.id,vm);if let Err(error)=result{failure.get_or_insert(error);}}
+            if let Some(error)=failure{return Err(error);}
         }
         self.core.borrow_mut().barrier()?;
         let mut bus=self.bus.borrow_mut();
@@ -606,22 +629,50 @@ impl Runtime {
         Ok(())
     }
     pub fn snapshot(&self)->Value{
-        let mut snapshot=self.core.borrow().snapshot();
+        self.projection(false)
+    }
+    pub fn projection(&self,compact:bool)->Value{
+        let mut snapshot=if compact{self.core.borrow().projection(true)}else{self.core.borrow().snapshot()};
         snapshot["schema_version"]=json!(1);snapshot["run_id"]=json!(self.run_id);snapshot["control"]=json!(self.control);
         snapshot["execution"]=json!({"scheduler":"parallel-native-round-robin-v1","max_parallel_vms":VM_COHORT});
         snapshot["seq"]=json!(self.core.borrow().sequence);
-        if let Some(agents)=snapshot["agents"].as_array_mut(){for agent in agents {if let Some(vm)=agent["id"].as_u64().and_then(|id|self.vms.get(&id)){agent["last_fuel"]=json!(vm.last_fuel);agent["memory_bytes"]=json!(vm.memory.current());agent["peak_memory_bytes"]=json!(vm.memory.peak());agent["coroutines"]=json!(vm.runnable.len());agent["backlog"]=json!(vm.pending.len());agent["runtime_errors"]=json!(vm.errors);agent["allowance"]=json!(self.core.borrow().config.fuel_per_tick);}}}
+        self.enrich_agents(&mut snapshot["agents"]);
         let bus=self.bus.borrow();let mut topics=bus.topics.clone();for (topic,subscribers) in &bus.membership {let entry=topics.entry(topic.clone()).or_insert(json!({"topic":topic,"publication_count":0,"last_tick":null}));entry["subscribers"]=json!(subscribers);}
         snapshot["topics"]=json!(topics.into_values().collect::<Vec<_>>());
-        snapshot["debug"]=json!({"enabled":self.core.borrow().config.dbg,"agents":self.debug.borrow().0});snapshot
+        snapshot["debug"]=json!({"enabled":self.core.borrow().config.dbg,"agents":self.debug.borrow().0});if compact{snapshot["compact"]=json!(true);}snapshot
+    }
+    fn agent_projection(&self,compact:bool)->Value{
+        let mut agents=self.core.borrow().snapshot_field("agents",compact);
+        self.enrich_agents(&mut agents);agents
+    }
+    fn enrich_agents(&self,agents:&mut Value){
+        for agent in agents.as_array_mut().unwrap(){if let Some(vm)=agent["id"].as_u64().and_then(|id|self.vms.get(&id)){agent["last_fuel"]=json!(vm.last_fuel);agent["memory_bytes"]=json!(vm.memory.current());agent["peak_memory_bytes"]=json!(vm.memory.peak());agent["coroutines"]=json!(vm.runnable.len());agent["backlog"]=json!(vm.pending.len());agent["runtime_errors"]=json!(vm.errors);agent["allowance"]=json!(self.core.borrow().config.fuel_per_tick);}}
+    }
+    pub fn details(&self,request:&crate::server::Details)->Value{
+        if request.run_id!=self.run_id{return json!({"error":"STALE_RUN","run_id":self.run_id});}
+        let core=self.core.borrow();
+        let (items,total)=match request.kind.as_str(){
+            "job"=>{let items=core.jobs.get(&request.id).map(|j|vec![serde_json::to_value(j).unwrap()]).unwrap_or_default();let total=items.len();(items,total)},
+            "scenario"=>(vec![core.snapshot_field("scenario",false)],1),
+            "observations"=>{
+                let matches=|observation:&&crate::sim::Observation|request.target.is_none_or(|target|{
+                    let o=&observation.result;
+                    o["target"].as_u64()==Some(target)||(o.get("target").is_none()&&o["router_id"].as_u64()==Some(target))
+                    ||o["data"]["hosts"].as_array().is_some_and(|hosts|hosts.iter().any(|h|h["id"].as_u64()==Some(target)))
+                    ||o["data"]["routers"].as_array().is_some_and(|routers|routers.contains(&json!(target)))
+                    ||o["data"]["pairs"].as_array().is_some_and(|pairs|pairs.iter().any(|p|p["a"].as_u64()==Some(target)||p["b"].as_u64()==Some(target)))
+                    ||o["data"]["connections"].as_array().is_some_and(|connections|connections.iter().any(|c|c["peer"].as_u64()==Some(target)))
+                });
+                let observations=core.agents.get(&request.id).map(|a|a.observations.iter().filter(matches).collect::<Vec<_>>()).unwrap_or_default();
+                let total=observations.len();(observations.into_iter().skip(request.offset).take(request.limit).map(|o|serde_json::to_value(o).unwrap()).collect(),total)
+            },
+            _=>return json!({"error":"UNKNOWN_DETAIL","run_id":self.run_id}),
+        };
+        json!({"run_id":self.run_id,"tick":core.tick,"offset":request.offset,"total":total,"items":items})
     }
     /// Semantic replay excludes presentation speed and VM allocator diagnostics.
     pub fn state_hash(&self)->String{
-        let mut value=self.snapshot();value.as_object_mut().unwrap().remove("run_id");value.as_object_mut().unwrap().remove("seq");value.as_object_mut().unwrap().remove("control");
-        value.as_object_mut().unwrap().remove("debug");
-        if let Some(scenario)=value["scenario"].as_object_mut(){scenario.remove("tick_ms");}
-        if let Some(agents)=value["agents"].as_array_mut(){for a in agents {for key in ["memory_bytes","peak_memory_bytes"]{a.as_object_mut().unwrap().remove(key);}}}
-        value["scheduler"]=json!(self.vms.values().map(|vm|json!({"agent":vm.id,"fuel":vm.budget.total.get(),"remaining":vm.budget.remaining.get(),"coroutines":vm.runnable.iter().map(|c|json!({"source":c.source,"message":c.message,"wait":match &c.wait{Wait::Runnable=>json!({"kind":"runnable"}),Wait::Tick(t)=>json!({"tick":t}),Wait::Task(t)=>json!({"task":t}),Wait::Any(t)=>json!({"any":t})}})).collect::<Vec<_>>(),"pending":vm.pending.iter().map(|m|json!({"id":m.id,"sender":m.sender,"topic":m.topic,"payload":m.payload,"sent_at":m.sent_at})).collect::<Vec<_>>(),"subscriptions":vm.handlers.borrow().topics.keys().collect::<Vec<_>>(),"direct_handler":vm.handlers.borrow().direct.is_some()})).collect::<Vec<_>>());
+        use std::io::Write;
         struct HashWriter(Sha256);
         impl std::io::Write for HashWriter {
             fn write(&mut self,bytes:&[u8])->std::io::Result<usize>{self.0.update(bytes);Ok(bytes.len())}
@@ -630,7 +681,23 @@ impl Runtime {
         let mut writer=HashWriter(Sha256::new());
         {
             let mut buffer=std::io::BufWriter::with_capacity(64*1024,&mut writer);
-            serde_json::to_writer(&mut buffer,&value).unwrap();
+            buffer.write_all(b"{").unwrap();
+            let keys=Core::SNAPSHOT_FIELDS.into_iter().chain(["sessions","schema_version","execution","scheduler","topics"]).collect::<std::collections::BTreeSet<_>>();
+            for (index,key) in keys.into_iter().enumerate(){
+                if index>0{buffer.write_all(b",").unwrap();}serde_json::to_writer(&mut buffer,key).unwrap();buffer.write_all(b":").unwrap();
+                let mut value=match key {
+                    "agents"=>self.agent_projection(false),
+                    "execution"=>json!({"scheduler":"parallel-native-round-robin-v1","max_parallel_vms":VM_COHORT}),
+                    "schema_version"=>json!(1),
+                    "topics"=>{let bus=self.bus.borrow();let mut topics=bus.topics.clone();for (topic,subscribers) in &bus.membership{let entry=topics.entry(topic.clone()).or_insert(json!({"topic":topic,"publication_count":0,"last_tick":null}));entry["subscribers"]=json!(subscribers);}json!(topics.into_values().collect::<Vec<_>>())},
+                    "scheduler"=>json!(self.vms.values().map(|vm|json!({"agent":vm.id,"fuel":vm.budget.total.get(),"remaining":vm.budget.remaining.get(),"coroutines":vm.runnable.iter().map(|c|json!({"source":c.source,"message":c.message,"wait":match &c.wait{Wait::Runnable=>json!({"kind":"runnable"}),Wait::Tick(t)=>json!({"tick":t}),Wait::Task(t)=>json!({"task":t}),Wait::Any(t)=>json!({"any":t})}})).collect::<Vec<_>>(),"pending":vm.pending.iter().map(|m|json!({"id":m.id,"sender":m.sender,"topic":m.topic,"payload":m.payload,"sent_at":m.sent_at})).collect::<Vec<_>>(),"subscriptions":vm.handlers.borrow().topics.keys().collect::<Vec<_>>(),"direct_handler":vm.handlers.borrow().direct.is_some()})).collect::<Vec<_>>()),
+                    _=>self.core.borrow().snapshot_field(key,false),
+                };
+                if key=="scenario"{value.as_object_mut().unwrap().remove("tick_ms");}
+                if key=="agents"{for a in value.as_array_mut().unwrap(){for key in ["memory_bytes","peak_memory_bytes"]{a.as_object_mut().unwrap().remove(key);}}}
+                serde_json::to_writer(&mut buffer,&value).unwrap();
+            }
+            buffer.write_all(b"}").unwrap();
             std::io::Write::flush(&mut buffer).unwrap();
         }
         format!("{:x}",writer.0.finalize())

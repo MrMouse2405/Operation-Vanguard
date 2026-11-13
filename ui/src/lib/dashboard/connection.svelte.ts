@@ -51,7 +51,7 @@ export function createConnection() {
 		} catch (cause) { error = String(cause); }
 	}
 	async function getSnapshot() {
-		try { const response = await fetch('/api/snapshot'); if (!response.ok) throw new Error(`Snapshot unavailable (${response.status})`); const data = await response.json(); receive(data.type ? data : { schema_version: 1, type: 'snapshot', run_id: data.run_id, seq: data.seq, tick: data.tick, snapshot: data }); }
+		try { const response = await fetch('/api/snapshot?compact=true'); if (!response.ok) throw new Error(`Snapshot unavailable (${response.status})`); const data = await response.json(); receive(data.type ? data : { schema_version: 1, type: 'snapshot', run_id: data.run_id, seq: data.seq, tick: data.tick, snapshot: data }); }
 		catch (cause) { status = 'Disconnected'; error = String(cause); }
 	}
 	async function send(command: Command, ticks?: number, seconds_per_tick?: number) {
@@ -63,7 +63,7 @@ export function createConnection() {
 			if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(body));
 			else if (fallback) {
 				if (command === 'GetSnapshot') { await getSnapshot(); return; }
-				const response = await fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+				const response = await fetch('/api/command?compact=true', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 				const data = await response.json(); receive(data); if (!response.ok) throw new Error(data.error ?? `Command failed (${response.status})`); await getSnapshot();
 			} else throw new Error('Runtime disconnected. Wait for reconnection and try again.');
 		} catch (cause) { if (command !== 'GetSnapshot') { pending = null; clearTimeout(timeout); } error = String(cause); syncing = false; }
@@ -72,7 +72,7 @@ export function createConnection() {
 		if (stopped) return;
 		if (!('WebSocket' in window)) { fallback = true; void getSnapshot(); poll = setInterval(getSnapshot, 1500); return; }
 		status = attempt ? 'Reconnecting' : 'Connecting';
-		socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws?records=true`);
+		socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws?records=true&compact=true`);
 		socket.onopen = () => { attempt = 0; error = ''; status = 'Synchronizing'; syncing = false; };
 		socket.onmessage = event => { try { receive(JSON.parse(event.data)); } catch { error = 'Could not read runtime update. Request a fresh snapshot.'; } };
 		socket.onclose = () => { if (stopped) return; status = 'Reconnecting'; pending = null; clearTimeout(timeout); reconnect = setTimeout(connect, Math.min(15000, 500 * 2 ** attempt++)); };

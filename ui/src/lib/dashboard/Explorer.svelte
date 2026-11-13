@@ -6,6 +6,7 @@
 	import type { Snapshot, Node } from './types';
 	import Topology from './Topology.svelte';
 	import Globe from './Globe.svelte';
+	import { inventory } from './inventory';
 	import NodeInspector from './NodeInspector.svelte';
 	import PaneResize from './PaneResize.svelte';
 	let {snapshot,hostState=$bindable('all'),hostType=$bindable('all'),children,onscope}:{snapshot:Snapshot|null;hostState?:string;hostType?:string;children:Snippet;onscope?:(router:number|null)=>void}=$props();
@@ -26,10 +27,11 @@
 	function saveWidths(){try{localStorage.setItem('vanguard-explorer-panes',JSON.stringify({left:leftWidth,right:rightWidth}));}catch{/* Optional. */}}
 	let scope=$state<number|null>(null);let selected=$state<number|null>(null);
 	let view=$state('map');let side=$state('hierarchy');let sidePage=$state(0);let tablePage=$state(0);let lanPage=$state(0);
-	let hosts=$derived(snapshot?.nodes.filter(n=>n.type!=='ROUTER')??[]);
-	let routers=$derived(snapshot?.nodes.filter(n=>n.type==='ROUTER')??[]);
-	let byRouter=$derived.by(()=>{const map=new Map<number,Node[]>();for(const n of hosts){const list=map.get(n.router_id)??[];list.push(n);map.set(n.router_id,list);}return map;});
-	let byId=$derived(new Map((snapshot?.nodes??[]).map(n=>[n.id,n])));
+	let index=$derived(inventory(snapshot?.nodes??[]));
+	let hosts=$derived(index.hosts);
+	let routers=$derived(index.routers);
+	let byRouter=$derived(index.byRouter);
+	let byId=$derived(index.byId);
 	let agentsByRouter=$derived(new Map((snapshot?.agents??[]).map(a=>[a.router_id,a])));
 	let query=$derived(search.trim().toLowerCase());
 	let searchLabels=$derived(new Map(hosts.map(n=>[n.id,`${n.id} ${n.type==='SERVER'?'srv':'ws'}-${n.id} LAN ${n.lan_id??n.router_id} R${n.router_id} A${agentsByRouter.get(n.router_id)?.id}`.toLowerCase()])));
@@ -88,7 +90,7 @@
 			{:else if view==='table'&&scope===null}<div class="node-table-wrap"><table class="node-table lan-table"><thead><tr><th>LAN / ROUTER</th><th>HOSTS</th><th>MATCHING</th><th>SERVERS</th><th>COMPROMISED</th><th>IN DANGER</th></tr></thead><tbody>{#each visibleLans as router (router.id)}{@const nodes=byRouter.get(router.id)??[]}<tr onclick={()=>enter(router.id)}><td><button onclick={()=>enter(router.id)}><Network size={14}/> LAN {router.lan_id??router.id} / R{router.id}</button></td><td>{nodes.length}</td><td>{matchingCounts.get(router.id)??0}</td><td>{nodes.filter(n=>n.type==='SERVER').length}</td><td class:red={countBad(nodes)>0}>{countBad(nodes)}</td><td class:amber={countDanger(nodes)>0}>{countDanger(nodes)}</td></tr>{:else}<tr><td colspan="6" class="empty">No matching LANs. Try an ID or reset filters.</td></tr>{/each}</tbody></table></div>
 			{:else if view==='table'}<div class="node-table-wrap"><table class="node-table"><thead><tr><th>HOST / ID</th><th>STATE</th><th>LAN / ROUTER</th><th>TYPE</th><th>POWER</th></tr></thead><tbody>{#each scoped.slice(tablePage*80,tablePage*80+80) as node (node.id)}<tr class:selected={selected===node.id}><td><button onclick={()=>select(node.id)}>{#if node.type==='SERVER'}<Server size={14}/>{:else}<Monitor size={14}/>{/if} {node.type==='SERVER'?'srv':'ws'}-{node.id}</button></td><td class:red={node.compromised} class:amber={!!node.exposure&&!node.compromised} class:green={!node.compromised&&!node.exposure}>{stateOf(node).replaceAll('_',' ')}{node.isolated?' / ISO':''}</td><td>{node.lan_id??node.router_id} / R{node.router_id}</td><td>{node.type}</td><td>{node.power}</td></tr>{:else}<tr><td colspan="5" class="empty">No matching hosts in this scope.</td></tr>{/each}</tbody></table></div>
 			{:else if scope===null}<div class="health-map"><div class="health-map-title"><h2>Network health map</h2><p>Aggregates show host health, not physical routing links.</p></div><div class="lan-grid">{#each visibleLans as router (router.id)}{@const nodes=byRouter.get(router.id)??[]}{@const bad=countBad(nodes)}{@const danger=countDanger(nodes)}<button class="lan-tile" class:dim={!matchingCounts.has(router.id)} onclick={()=>enter(router.id)}><strong><Network size={15}/> LAN {router.lan_id??router.id}</strong><span>{nodes.length} hosts · R{router.id}</span><span class="blue">SRV {nodes.filter(n=>n.type==='SERVER').length} / !{countBad(nodes.filter(n=>n.type==='SERVER'))}</span><span class="health-strip"><i style={`flex:${nodes.length-bad-danger}`}></i><i class="exposed" style={`flex:${danger}`}></i><i class="infected" style={`flex:${bad}`}></i></span><small><span class="red">{bad} compromised</span> · <span class="amber">{danger} exposed</span></small></button>{/each}</div>{#if routers.length>48}<div class="table-pagination"><button disabled={lanPage===0} onclick={()=>lanPage--}>Previous LANs</button><button disabled={(lanPage+1)*48>=routers.length} onclick={()=>lanPage++}>Next LANs</button></div>{/if}</div>
-			{:else}<div class="lan-detail"><Topology snapshot={graphSnapshot} selected={selectedNode?.router_id===scope?selected:null} onselect={select}/></div>{/if}
+			{:else}<div class="lan-detail"><Topology snapshot={graphSnapshot} {scope} selected={selectedNode?.router_id===scope?selected:null} onselect={select}/></div>{/if}
 		</div>
 		<div class="explorer-context"><span>{view==='globe'?'Live tasks and host sessions · arrows show direction':scope===null?`${matchingRouters.length} matching LANs · select a LAN to explore hosts`:`${scoped.length} matching hosts · ${view==='map'?'bounded LAN detail':'80 rows per page'}`}</span>{#if view==='globe'}<span>Illustrative geography</span>{:else if scope!==null}<div class="inventory-pager"><button disabled={tablePage===0} onclick={()=>tablePage--}>Previous</button><span>{scoped.length?tablePage*80+1:0}–{Math.min((tablePage+1)*80,scoped.length)}</span><button disabled={(tablePage+1)*80>=scoped.length} onclick={()=>tablePage++}>Next</button></div>{:else if view==='table'}<div class="inventory-pager"><button disabled={lanPage===0} onclick={()=>lanPage--}>Previous</button><span>{matchingRouters.length?lanPage*48+1:0}–{Math.min((lanPage+1)*48,matchingRouters.length)}</span><button disabled={(lanPage+1)*48>=matchingRouters.length} onclick={()=>lanPage++}>Next</button></div>{:else}<span>{matchingRouters.length} aggregates / {matches.length} hosts</span>{/if}</div>
 		{@render children()}

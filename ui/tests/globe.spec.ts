@@ -13,6 +13,9 @@ test('globe and topology show directional live tasks and sessions, with usable i
 	const first=await canvas.evaluate((c:HTMLCanvasElement)=>c.toDataURL());
 	await expect.poll(()=>canvas.evaluate((c:HTMLCanvasElement)=>c.toDataURL())).not.toBe(first);
 	await page.getByRole('button',{name:'Pause globe rotation'}).click();
+	await page.getByRole('button',{name:'Zoom globe in',exact:true}).click();await expect(page.getByLabel('Globe zoom')).toHaveText('120%');
+	await canvas.hover();await page.mouse.wheel(0,-200);await expect.poll(()=>page.getByLabel('Globe zoom').innerText()).not.toBe('120%');
+	await page.getByRole('button',{name:'Reset globe camera'}).click();await expect(page.getByLabel('Globe zoom')).toHaveText('100%');
 	await page.getByRole('combobox',{name:'Globe flow type'}).selectOption('task');await expect(page.locator('.globe-flow')).toHaveCount(1);
 	await page.locator('.globe-flow').getByRole('button',{name:'Host 1002'}).click();await expect(page.locator('.selected-node')).toContainText('1002');
 	await expect(page.getByRole('button',{name:'Globe',exact:true})).toHaveAttribute('aria-pressed','true');

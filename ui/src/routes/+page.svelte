@@ -10,6 +10,7 @@
 	import JsonTree from '$lib/dashboard/JsonTree.svelte';
 	import DebugViews from '$lib/dashboard/DebugViews.svelte';
 	import PaneResize from '$lib/dashboard/PaneResize.svelte';
+	import { loadDetails } from '$lib/dashboard/details';
 	import '$lib/dashboard/dashboard.css';
 	import '$lib/dashboard/explorer-fixes.css';
 	const runtime = createConnection();
@@ -20,6 +21,13 @@
 	let dockHeight = $state(260);
 	let viewportHeight = $state(1000);
 	let settings = $state(false);
+	let scenarioDetails=$state.raw<any>(null);let scenarioError=$state('');
+	let runId=$derived(snapshot?.run_id);let compactProjection=$derived(!!snapshot?.compact);
+	$effect(()=>{
+		const run=runId;scenarioDetails=null;scenarioError='';
+		if(!settings||!compactProjection||!run)return;
+		const controller=new AbortController();void loadDetails(run,'scenario',0,controller.signal).then(value=>scenarioDetails=value.items[0]).catch(error=>{if(!controller.signal.aborted)scenarioError=error.message;});return()=>controller.abort();
+	});
 	let showDebug = $state(false);
 	let count = $state(10);
 	let inputError = $state('');
@@ -80,4 +88,4 @@
 	</Explorer>
 	<footer class="status-bar"><span><span class="live-dot"></span><span role="status">{runtime.status}</span> · {controlState} · {snapshot?.run_id ?? 'Connecting'}</span><span>{snapshot?.agents.length??0} immune routers / {hosts.length} hosts · {snapshot?.history.evicted??0} events evicted</span></footer>
 </div>
-<Modal bind:open={settings} title="Match rules"><p>One agent, private router VMs. Score: 600 service + 250 security + 150 recovery. Verified full recovery ends the match immediately; recovery points are provisional until the match ends. Early victory credits unused deadline ticks at the final service and clean-host fractions.</p><JsonTree value={snapshot?.scenario ?? {}} /><button onclick={() => runtime.send('GetSnapshot')}>Refresh snapshot</button></Modal>
+<Modal bind:open={settings} title="Match rules"><p>One agent, private router VMs. Score: 600 service + 250 security + 150 recovery. Verified full recovery ends the match immediately; recovery points are provisional until the match ends. Early victory credits unused deadline ticks at the final service and clean-host fractions.</p>{#if scenarioError}<p role="alert">{scenarioError}</p>{:else if compactProjection&&!scenarioDetails}<p>Loading full scenario details…</p>{/if}<JsonTree value={scenarioDetails??snapshot?.scenario ?? {}} /><button onclick={() => runtime.send('GetSnapshot')}>Refresh snapshot</button></Modal>

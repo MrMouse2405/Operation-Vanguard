@@ -66,6 +66,8 @@ pub struct Score {
     clean_ppm: u64,
     operational_ppm: u64,
     working: Vec<bool>,
+    last_nodes:std::collections::BTreeMap<u64,crate::sim::Node>,
+    dependents:std::collections::BTreeMap<u64,Vec<usize>>,
 }
 const SCALE: u64=1_000_000;
 fn fraction(a:u64,b:u64)->u64 { if b==0 {0}else{((a as u128*SCALE as u128)/b as u128) as u64} }
@@ -79,14 +81,37 @@ impl Score {
         if self.defeated_at.is_some() || self.verified_at.is_some() { return; }
         let mission=core.config.mission.as_ref().unwrap();
         let working=|s:&Service|!core.nodes[&s.client].compromised && !core.nodes[&s.server].compromised && core.traffic_allowed(s.client,s.server);
-        self.working=if mission.services.len()>=8192 {
-            // Independent reads of one committed boundary; join in source order
-            // before performing integer score accounting or changing the world.
-            std::thread::scope(|scope|{
-                let workers=mission.services.chunks(mission.services.len().div_ceil(8)).map(|services|scope.spawn(||services.iter().map(working).collect::<Vec<_>>())).collect::<Vec<_>>();
-                workers.into_iter().flat_map(|worker|worker.join().expect("service evaluation worker panicked")).collect()
-            })
+        use rayon::prelude::*;
+        static WORKERS:std::sync::OnceLock<rayon::ThreadPool>=std::sync::OnceLock::new();
+        let workers=||WORKERS.get_or_init(||rayon::ThreadPoolBuilder::new().num_threads(8).thread_name(|i|format!("vanguard-service-{i}")).build().expect("could not start service workers"));
+        let evaluate_all=||if mission.services.len()>=8192 {
+            workers().install(||mission.services.par_iter().map(working).collect::<Vec<_>>())
         }else{mission.services.iter().map(working).collect()};
+        if self.working.len()!=mission.services.len()||self.last_nodes.is_empty(){
+            self.dependents.clear();
+            for (index,service) in mission.services.iter().enumerate(){
+                for node in [service.client,service.server].into_iter().chain(core.route(service.client,service.server).into_iter().flatten()){
+                    self.dependents.entry(node).or_default().push(index);
+                }
+            }
+            self.working=evaluate_all();
+            self.last_nodes=core.nodes.clone();
+        }else{
+            let mut invalid=vec![false;mission.services.len()];
+            for (id,node) in &core.nodes{if self.last_nodes.get(id)!=Some(node){
+                for index in self.dependents.get(id).into_iter().flatten(){invalid[*index]=true;}
+                self.last_nodes.insert(*id,node.clone());
+            }}
+            let dirty=invalid.iter().enumerate().filter_map(|(i,invalid)|invalid.then_some(i)).collect::<Vec<_>>();
+            // Broad router changes can affect almost all service pairs. A dense
+            // pass is cheaper than indirect lookups in that case.
+            if dirty.len()>mission.services.len()/2{self.working=evaluate_all();}
+            else if dirty.len()>=2048{
+                let results=workers().install(||dirty.par_iter().map(|index|(*index,working(&mission.services[*index]))).collect::<Vec<_>>());
+                for (index,value) in results{self.working[index]=value;}
+            }
+            else{for index in dirty{self.working[index]=working(&mission.services[index]);}}
+        }
         let total:u64=mission.services.iter().map(|s|s.weight).sum();
         let served:u64=mission.services.iter().zip(&self.working).filter(|(_,ok)|**ok).map(|(s,_)|s.weight).sum();
         let mut blocked_hosts=std::collections::BTreeSet::new();
@@ -119,19 +144,23 @@ impl Score {
         }
     }
     pub fn snapshot(&self, core:&Core)->Value {
+        self.projection(core,false)
+    }
+    pub fn projection(&self,core:&Core,compact:bool)->Value {
         let mission=core.config.mission.as_ref().unwrap();
         let horizon=core.config.tick_limit.unwrap();
         let service=((60_000u128*self.service_sum as u128)/(horizon as u128*SCALE as u128)) as u64;
         let security=((25_000u128*self.clean_sum as u128)/(horizon as u128*SCALE as u128)) as u64;
         let recovery=if self.defeated_at.is_some(){0}else{15_000*self.operational_ppm/SCALE};
         let outcome=if self.defeated_at.is_some(){"DEFEAT"}else if self.verified_at.is_some(){"VICTORY"}else if core.tick>=horizon{"INCOMPLETE"}else if self.recovery_streak>0{"VERIFYING"}else{"ACTIVE"};
-        json!({"enabled":true,"outcome":outcome,"total":(service+security+recovery) as f64/100.,
+        let mut value=json!({"enabled":true,"outcome":outcome,"total":(service+security+recovery) as f64/100.,
             "service":service as f64/100.,"security":security as f64/100.,"recovery":recovery as f64/100.,
             "service_fraction":self.service_ppm as f64/SCALE as f64,"clean_fraction":self.clean_ppm as f64/SCALE as f64,
             "operational_fraction":self.operational_ppm as f64/SCALE as f64,"recovery_streak":self.recovery_streak,
             "outage_streak":self.outage_streak,"verified_at":self.verified_at,"defeated_at":self.defeated_at,
-            "horizon":horizon,"service_sum":self.service_sum,"clean_sum":self.clean_sum,
-            "services":mission.services.iter().enumerate().map(|(i,s)|json!({"client":s.client,"server":s.server,"weight":s.weight,"working":self.working.get(i).copied().unwrap_or(false)})).collect::<Vec<_>>()})
+            "horizon":horizon,"service_sum":self.service_sum,"clean_sum":self.clean_sum});
+        if !compact{value["services"]=json!(mission.services.iter().enumerate().map(|(i,s)|json!({"client":s.client,"server":s.server,"weight":s.weight,"working":self.working.get(i).copied().unwrap_or(false)})).collect::<Vec<_>>());}
+        value
     }
 }
 
@@ -139,12 +168,27 @@ impl Score {
 mod tests {
     use super::*;
     #[test]
-    fn parallel_service_evaluation_matches_serial_flags_and_accounting(){
+    fn incremental_services_match_full_evaluation_after_sparse_and_router_policy_changes(){
         let mut config=Config{router_count:2,hosts_per_lan:64,server_count:64,initial_compromised:Some(vec![]),tick_limit:Some(100),..Config::default()};
-        let mut mission=Mission::default();mission.expand(&config);assert_eq!(mission.services.len(),8192);config.mission=Some(mission);
+        let mut mission=Mission::default();mission.recovery_ticks=100;mission.outage_ticks=100;mission.expand(&config);assert_eq!(mission.services.len(),8192);config.mission=Some(mission);
         let mut core=Core::new(config).unwrap();
-        for tick in 0..4{
-            core.nodes.get_mut(&1).unwrap().isolated=tick%2==0;
+        let client=core.config.mission.as_ref().unwrap().services[0].client;
+        let server=core.config.mission.as_ref().unwrap().services[0].server;
+        for tick in 0..12{
+            match tick {
+                0=>core.nodes.get_mut(&client).unwrap().compromised=true,
+                1=>core.nodes.get_mut(&client).unwrap().compromised=false,
+                2=>core.nodes.get_mut(&server).unwrap().power="OFFLINE".into(),
+                3=>core.nodes.get_mut(&server).unwrap().power="ONLINE".into(),
+                4=>core.nodes.get_mut(&1).unwrap().isolated=true,
+                5=>core.nodes.get_mut(&1).unwrap().isolated=false,
+                6=>{core.nodes.get_mut(&1).unwrap().exceptions.insert(client);},
+                7=>core.nodes.get_mut(&1).unwrap().exceptions.clear(),
+                8=>core.nodes.get_mut(&client).unwrap().policy="DEFAULT_DENY".into(),
+                9=>{core.nodes.get_mut(&client).unwrap().exceptions.insert(server);},
+                10=>core.nodes.get_mut(&client).unwrap().isolated=true,
+                _=>core.nodes.get_mut(&client).unwrap().isolated=false,
+            }
             core.barrier().unwrap();
             let mission=core.config.mission.as_ref().unwrap();
             let expected=mission.services.iter().map(|s|!core.nodes[&s.client].compromised&&!core.nodes[&s.server].compromised&&core.traffic_allowed(s.client,s.server)).collect::<Vec<_>>();

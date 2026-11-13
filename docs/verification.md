@@ -413,3 +413,28 @@ Sections below retain prior verification history.
 - Tests cover the specified core timing, scope, filtering, VM isolation and
   synchronization scenarios; they are not an exhaustive Cartesian product of
   every action, graph, resource setting and browser interaction.
+# Incremental engine and topology usability follow-up (2026-11-12)
+
+- `VANGUARD_SKIP_UI_BUILD=1 cargo test --quiet`: 55 passing tests, including
+  sparse/dense service invalidation and exact on-demand/shared result retrieval.
+- `bun run check`: zero errors or warnings. Chromium suite: 13 passing tests;
+  the topology regression was also rerun after the phone framing/readability fix.
+  `cargo build --release --locked` passed. Mechanical UI detector: `[]`.
+- Desktop and 390px phone captures reviewed: long host IDs remain separated,
+  power/isolation appears below IDs, LAN headings remain inside group bounds,
+  router running jobs open results, and discovered perspective defaults to owner.
+  Tests also verify preserved camera state after changing session membership,
+  globe button/wheel zoom and no document horizontal overflow.
+- All 21 outbreak replay hashes and all 46 final-control hashes match `af44271`.
+  Final control still finishes at T45 with score 999.91 and hash
+  `44bd152cd7fd5bfc33744cbbde0f5f65cc9988e9b9d8bb24bcd7ecee8272014b`.
+- Three-sample plain-headless level-10/T20 median: 1.160 → 1.074 seconds
+  (about 7.4% lower wall time). Median maximum RSS: 199,364 → 97,760 KiB
+  (about 51% lower). A separate replay sample: 3.618 → 2.953 seconds;
+  do not interpret the single replay sample as a stable per-component speedup.
+- Real final-network initial projection: 7,030,446 bytes full → 2,090,766 bytes
+  compact (70.26% reduction). Live compact stepping, on-demand job retrieval and
+  stale-run rejection passed. This measures initial snapshots, not socket deltas.
+- Evidence: ignored `.impeccable/review/incremental-controlled-results.json`,
+  `incremental-after-{replay,control}.json`, and Chromium `topology-labels-*.png`
+  captures under `ui/test-results/`.

@@ -18,6 +18,22 @@ impl Drop for Fixture {fn drop(&mut self){let _=fs::remove_dir_all(&self.0);}}
 fn events(runtime:&Runtime,kind:&str)->Vec<Value>{runtime.snapshot()["events"].as_array().unwrap().iter().filter(|e|e["kind"]==kind).cloned().collect()}
 
 #[test]
+fn compact_projection_retrieves_exact_shared_job_and_observation_details_and_rejects_stale_runs(){
+    let fixture=Fixture::new("vanguard.await(vanguard.deploy({action=vanguard.sense.SCAN}))");
+    let mut runtime=Runtime::new(fixture.config(2),"details".into()).unwrap();
+    for _ in 0..5{runtime.step().unwrap();}
+    let full=runtime.snapshot();let compact=runtime.projection(true);
+    let job=full["jobs"].as_array().unwrap().iter().find(|j|!j["result"].is_null()).unwrap();let id=job["id"].as_u64().unwrap();let agent=job["agent_id"].as_u64().unwrap();
+    assert!(compact["jobs"][0].get("result").is_none());assert!(compact["agents"][0]["observations"].as_array().unwrap().is_empty());assert!(compact["scenario"]["nodes"].is_null());
+    let mut request=crate::server::Details{kind:"job".into(),id,target:None,offset:0,limit:50,run_id:"details".into()};
+    assert_eq!(runtime.details(&request)["items"][0],*job);
+    request.kind="observations".into();request.id=agent;
+    let observations=runtime.details(&request);let expected=full["agents"].as_array().unwrap().iter().find(|a|a["id"]==agent).unwrap();assert_eq!(observations["items"],expected["observations"]);
+    let core=runtime.core.borrow();assert!(Arc::ptr_eq(core.jobs[&id].result.as_ref().unwrap(),&core.agents[&agent].observations[0].result));drop(core);
+    request.run_id="previous-run".into();assert_eq!(runtime.details(&request)["error"],"STALE_RUN");
+}
+
+#[test]
 fn debug_views_are_opt_in_write_only_namespaced_and_transactional(){
     let fixture=Fixture::new(r#"
         if not dbgguard then print('disabled'); return end
