@@ -253,6 +253,22 @@ impl Core {
         Ok((action.into(),target,peer,duration))
     }
     pub fn api(&mut self, agent: u64, method: &str, args: Value) -> Result<Value,String> {
+        if method!="deploy" {return self.api_read(agent,method,args);}
+        let state=self.agents.get(&agent).ok_or_else(||err("UNKNOWN_AGENT"))?;
+        let router=state.router_id;
+        let args=args.as_array().filter(|args|args.len()==1).ok_or_else(||err("INVALID_ARGUMENT"))?;
+        let (action,target,peer,duration)=self.descriptor(agent,&args[0],true)?;
+        let seq=self.submissions.entry(router).or_default();*seq+=1;
+        self.task_sequence=self.task_sequence.checked_add(1).filter(|v|*v<=9_007_199_254_740_991).ok_or_else(||err("LIMIT_EXCEEDED"))?;
+        let id=self.task_sequence;
+        let job=Job{id,agent_id:agent,router_id:router,source:String::new(),action,target,peer,state:"RUNNING".into(),started_at:self.tick,finished_at:None,fuel_spent:self.config.task_admission_cost,duration,result:None,failure:None,entered:false,changed:false,local_sequence:*seq};
+        self.jobs.insert(id,job);
+        self.emit("task_admitted",Some(agent),"core",json!({"task_id":id}));
+        Ok(json!(id))
+    }
+    /// Queries read committed world state and the calling router's reservations.
+    /// Separate shared reads let independent Lua VMs convert results concurrently.
+    pub fn api_read(&self, agent: u64, method: &str, args: Value) -> Result<Value,String> {
         let state = self.agents.get(&agent).ok_or_else(||err("UNKNOWN_AGENT"))?;
         let router = state.router_id;
         let args = args.as_array().ok_or_else(||err("INVALID_ARGUMENT"))?;
@@ -270,18 +286,11 @@ impl Core {
             }
             "slots" => {let n=self.jobs.values().filter(|j|j.router_id==router && j.state=="RUNNING").count(); Ok(json!({"capacity":5,"running":n,"available":5-n}))},
             "tasks" => Ok(json!(self.jobs.values().filter(|j|j.router_id==router && j.state=="RUNNING").map(|j|j.id).collect::<Vec<_>>())),
-            "deploy"|"cost"|"can_deploy" => {
+            "cost"|"can_deploy" => {
                 let parsed = self.descriptor(agent,first,method!="cost");
                 if method=="can_deploy" { return Ok(match parsed {Ok(_)=>json!([true]),Err(e)=>json!([false,e.split(':').next().unwrap()])}); }
-                let (action,target,peer,duration)=parsed?;
-                if method=="cost" {return Ok(json!({"fuel":self.config.task_admission_cost,"ticks":duration,"exact":true,"quoted_at":self.tick}));}
-                let seq=self.submissions.entry(router).or_default(); *seq+=1;
-                self.task_sequence=self.task_sequence.checked_add(1).filter(|v|*v<=9_007_199_254_740_991).ok_or_else(||err("LIMIT_EXCEEDED"))?;
-                let id=self.task_sequence;
-                let j=Job{id,agent_id:agent,router_id:router,source:String::new(),action,target,peer,state:"RUNNING".into(),started_at:self.tick,finished_at:None,fuel_spent:self.config.task_admission_cost,duration,result:None,failure:None,entered:false,changed:false,local_sequence:*seq};
-                self.jobs.insert(id,j);
-                self.emit("task_admitted",Some(agent),"core",json!({"task_id":id}));
-                Ok(json!(id))
+                let (_,_,_,duration)=parsed?;
+                Ok(json!({"fuel":self.config.task_admission_cost,"ticks":duration,"exact":true,"quoted_at":self.tick}))
             }
             "has_task"|"is_finished"|"is_ready"|"status"|"result" => {
                 let j=first.as_u64().and_then(|id|self.jobs.get(&id)).filter(|j|j.router_id==router);

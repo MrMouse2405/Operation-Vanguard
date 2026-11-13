@@ -34,6 +34,13 @@ Maintainer Git-install and distribution instructions: [docs/install-from-git.md]
 **Every router runs the same supplied code in a different VM.** Globals, module
 caches, handlers, memory and fuel are private. Hosts never run agent VMs.
 
+Router VMs execute Lua concurrently in fixed groups of up to **eight worker
+threads**. Shared-effect native calls take deterministic round-robin turns within each group;
+the world advances only after every router finishes its tick allowance or waits.
+This preserves reproducible outcomes independently of OS scheduling and CPU
+count. Fuel and task durations still use simulation ticks, not wall-clock time.
+Native-call-heavy workloads and the network/enemy barrier may limit speedups.
+
 Use `--port 8080` for another port or `--port 0` for an available port. The actual
 URL is printed on startup. The process binds to loopback by default.
 

@@ -100,7 +100,7 @@ fn new_mail_lua_snippets_execute_in_the_real_sandbox(){
 #[test]
 fn independent_vms_and_busy_loop_barriers_are_replayable(){
     let fixture=Fixture::new("private=(private or 0)+1; assert(private==1); print(vanguard.self(),vanguard.ticks()); while true do end");
-    for routers in [4,5]{
+    for routers in [4,5,9,17]{
         let config=fixture.config(routers);
         let mut a=Runtime::new(config.clone(),"a".into()).unwrap();
         let mut slower=config;slower.tick_ms+=123;
@@ -115,6 +115,57 @@ fn independent_vms_and_busy_loop_barriers_are_replayable(){
         assert!(events(&a,"runtime_error").is_empty());
         assert!(a.snapshot()["agents"].as_array().unwrap().iter().all(|a|a["last_fuel"]==a["allowance"]));
     }
+}
+
+#[test]
+fn lua_instruction_execution_overlaps_across_worker_threads(){
+    use std::sync::{Mutex,Condvar,atomic::AtomicBool};
+    use std::time::Duration;
+    let fixture=Fixture::new("local sum=0; for i=1,100 do sum=sum+i end; assert(sum==5050)");
+    let mut runtime=Runtime::new(fixture.config(VM_COHORT),"parallel".into()).unwrap();
+    let rendezvous=Arc::new((Mutex::new(BTreeSet::new()),Condvar::new()));
+    for vm in runtime.vms.values_mut(){
+        let rendezvous=rendezvous.clone();let first=AtomicBool::new(true);let budget=vm.budget.clone();let id=vm.id;
+        vm.runnable[0].thread.set_hook(HookTriggers::new().every_nth_instruction(1),move |_,_|{
+            if first.swap(false,Ordering::Relaxed){
+                let (lock,changed)=&*rendezvous;
+                let mut entered=lock.lock().unwrap();entered.insert(id);changed.notify_all();
+                let (entered,_)=changed.wait_timeout_while(entered,Duration::from_secs(10),|entered|entered.len()<VM_COHORT).unwrap();
+                if entered.len()!=VM_COHORT{return Err(lua_error("Lua workers did not execute concurrently"));}
+            }
+            if !budget.charge(1){return Ok(VmState::Yield);}
+            let quantum=budget.quantum.get().saturating_sub(1);budget.quantum.set(quantum);
+            Ok(if quantum==0||budget.remaining.get()==0{VmState::Yield}else{VmState::Continue})
+        }).unwrap();
+    }
+    runtime.step().unwrap();
+    assert_eq!(rendezvous.0.lock().unwrap().len(),VM_COHORT);
+    assert!(events(&runtime,"runtime_error").is_empty(),"{:?}",events(&runtime,"runtime_error"));
+}
+
+#[test]
+fn parallel_native_admissions_messages_and_errors_are_deterministic(){
+    let fixture=Fixture::new(r#"
+        vanguard.rx(function(sender,payload) print('received',sender,payload) end)
+        vanguard.sub('all',function(sender,topic,payload) print(topic,sender,payload) end)
+        vanguard.wait(1)
+        local id=vanguard.self()
+        for tick=1,4 do
+            local scan=vanguard.deploy({action=vanguard.sense.SCAN})
+            vanguard.pub('all',{from=id,tick=tick})
+            print('scan',scan)
+            vanguard.await(scan)
+        end
+        error('expected final error')
+    "#);
+    let mut a=Runtime::new(fixture.config(17),"first".into()).unwrap();
+    let mut b=Runtime::new(fixture.config(17),"repeat".into()).unwrap();
+    for _ in 0..30{
+        a.step().unwrap();b.step().unwrap();assert_eq!(a.state_hash(),b.state_hash());
+    }
+    assert_eq!(events(&a,"runtime_error").len(),17);
+    assert!(events(&a,"runtime_error").iter().all(|event|event["data"]["error"].as_str().unwrap().contains("expected final error")));
+    assert!(!events(&a,"publication").is_empty());
 }
 
 #[test]

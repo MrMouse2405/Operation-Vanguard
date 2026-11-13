@@ -113,8 +113,20 @@ ticks and are unrelated to instruction fuel.
 
 ## Determinism and topology
 
-- Sequential router VM slices and a shared barrier. Every VM sees committed
-  W[T]; admissions and locks are local reservations, not world mutations.
+- Parallel router VMs in fixed, sorted cohorts of eight and a shared barrier.
+  Lua instruction execution overlaps on worker threads; shared-effect native calls
+  and scheduler writes take deterministic round-robin turns. Read-only calls see
+  committed state plus the calling router's own reservations. Cohort size is
+  independent of hardware, so CPU count and OS scheduling do not affect outcomes.
+  Every VM sees committed W[T]; admissions and locks are local reservations,
+  not world mutations. Each VM retains its own fuel, memory and coroutine FIFO.
+- Workers join before the world/enemy/task/message barrier, snapshots or restart.
+  At most eight VM threads exist at once, even for a 1,000-router configuration.
+  A returned/errored VM leaves the cohort's turn rotation without blocking peers.
+- Scheduler identity is recorded in snapshots and semantic hashes. Native calls
+  now interleave across routers, so task/message ID allocation and replay hashes
+  can differ from the historical sequential scheduler; same-version runs remain
+  deterministic. This does not change task durations or infection intervals.
 - Sorted router/agent IDs and submission order. The enemy uses its own seeded
   PRNG, not Lua or UI randomness. The PRNG state is part of simulation metadata.
 - The selected shortest physical router path uses ID tie breaks. Filters are

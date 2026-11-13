@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-mlua = { version = "=0.12.2", features = ["lua55","vendored"] }
+mlua = { version = "=0.12.2", features = ["lua55","vendored","send"] }
 rocket = { version = "0.5.1", features = ["json"] }
 rust-embed = { version = "8", features = ["debug-embed"] }
 serde = { version = "1", features = ["derive"] }

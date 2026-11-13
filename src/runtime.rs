@@ -1,11 +1,10 @@
-//! Sequential router VMs and deterministic synchronization. Lua never owns the
+//! Parallel router VMs and deterministic synchronization. Lua never owns the
 //! world: bindings see a committed snapshot plus their router's reservations.
 use std::{
-    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
     path::Path,
-    rc::Rc,
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Condvar, atomic::{AtomicU64, Ordering}},
 };
 
 use mlua::chunk::ChunkMode;
@@ -18,6 +17,51 @@ use crate::sim::{self, Config, Core};
 const MAX_SOURCE_BYTES: usize = 1_048_576;
 const MAX_PENDING: usize = 100_000;
 const MAX_SAFE_ID: u64 = 9_007_199_254_740_991;
+
+// Fixed cohorts make native-call ordering independent of CPU count. Lua runs
+// concurrently; shared effects take deterministic round-robin turns. Read-only
+// calls observe committed world state plus only their own router's reservations.
+const VM_COHORT: usize = 8;
+
+pub struct Shared<T>(Arc<RwLock<T>>);
+impl<T> Clone for Shared<T> { fn clone(&self)->Self{Self(self.0.clone())} }
+impl<T> Shared<T> {
+    fn new(value:T)->Self{Self(Arc::new(RwLock::new(value)))}
+    pub fn borrow(&self)->RwLockReadGuard<'_,T>{self.0.read().unwrap_or_else(|e|e.into_inner())}
+    pub fn borrow_mut(&self)->RwLockWriteGuard<'_,T>{self.0.write().unwrap_or_else(|e|e.into_inner())}
+}
+
+#[derive(Default)]
+struct Counter(AtomicU64);
+impl Counter {
+    fn get(&self)->u64{self.0.load(Ordering::Relaxed)}
+    fn set(&self,value:u64){self.0.store(value,Ordering::Relaxed);}
+}
+
+#[derive(Default)]
+struct Turns { active:BTreeSet<u64>, next:Option<u64> }
+#[derive(Default)]
+struct Gate { turns:Mutex<Turns>, changed:Condvar }
+impl Gate {
+    fn reset(&self,ids:impl Iterator<Item=u64>){
+        let mut state=self.turns.lock().unwrap();state.active=ids.collect();state.next=state.active.first().copied();
+    }
+    fn enter(&self,id:u64)->Turn<'_>{
+        let mut state=self.turns.lock().unwrap_or_else(|e|e.into_inner());
+        while state.next!=Some(id){state=self.changed.wait(state).unwrap_or_else(|e|e.into_inner());}
+        Turn{gate:self,id}
+    }
+    fn advance(&self,id:u64,finished:bool){
+        let mut state=self.turns.lock().unwrap_or_else(|e|e.into_inner());
+        if finished {state.active.remove(&id);}
+        if state.next==Some(id){state.next=state.active.range((std::ops::Bound::Excluded(id),std::ops::Bound::Unbounded)).next().copied().or_else(||state.active.first().copied());}
+        self.changed.notify_all();
+    }
+}
+struct Turn<'a>{gate:&'a Gate,id:u64}
+impl Drop for Turn<'_>{fn drop(&mut self){self.gate.advance(self.id,false);}}
+struct Participant{gate:Arc<Gate>,id:u64}
+impl Drop for Participant{fn drop(&mut self){self.gate.advance(self.id,true);}}
 
 #[derive(Clone)]
 struct Handler { function: Function, source: String }
@@ -38,9 +82,11 @@ struct Bus {
 }
 
 #[derive(Default)]
-struct Budget { remaining: Cell<u64>, total: Cell<u64>, quantum: Cell<u64> }
+struct Budget { remaining: Counter, total: Counter, quantum: Counter }
 impl Budget {
     fn charge(&self, amount: u64) -> bool {
+        // Exactly one worker owns a VM at a time. Atomics make captured hook
+        // state Send + Sync; charging itself is never concurrent within a VM.
         if self.remaining.get() < amount { return false; }
         self.remaining.set(self.remaining.get() - amount);
         self.total.set(self.total.get().saturating_add(amount));
@@ -54,7 +100,7 @@ struct Coroutine {
     message: Option<(u64,u64)>,
 }
 struct Vm {
-    id: u64, lua: Lua, budget: Rc<Budget>, handlers: Rc<RefCell<Registrations>>,
+    id: u64, lua: Lua, budget: Arc<Budget>, handlers: Shared<Registrations>,
     runnable: VecDeque<Coroutine>, pending: VecDeque<Message>, errors: u64, last_fuel:u64,
     memory:crate::memory::AllocationMeter,
 }
@@ -196,7 +242,7 @@ fn source(lua:&Lua,fallback:&str)->String {
 }
 
 impl Vm {
-    fn new(id:u64,_router:u64,core:Rc<RefCell<Core>>,bus:Rc<RefCell<Bus>>,debug:Rc<RefCell<crate::debug::Store>>,staged:&Staged)->Result<Self,String> {
+    fn new(id:u64,_router:u64,core:Shared<Core>,bus:Shared<Bus>,debug:Shared<crate::debug::Store>,gate:Arc<Gate>,staged:&Staged)->Result<Self,String> {
         let config=core.borrow().config.clone();
         let lua=Lua::new_with(StdLib::TABLE|StdLib::STRING|StdLib::MATH|StdLib::COROUTINE,LuaOptions::default()).map_err(|e|e.to_string())?;
         lua.set_memory_limit(config.memory_limit).map_err(|e|e.to_string())?;
@@ -221,8 +267,8 @@ impl Vm {
         env.set("setmetatable",setmetatable).unwrap();
         let stable_tostring:Function=lua.load("local raw=...; return function(v) local k=type(v); if k=='table' then local mt=getmetatable(v); if type(mt)=='table' and type(mt.__tostring)=='function' then return mt.__tostring(v) end; return '<table>' elseif k=='function' or k=='thread' or k=='userdata' then return '<'..k..'>' end; return raw(v) end").set_environment(env.clone()).call(globals.get::<Function>("tostring").unwrap()).map_err(|e|e.to_string())?;
         env.set("tostring",stable_tostring).unwrap();
-        let budget=Rc::new(Budget::default());
-        let handlers=Rc::new(RefCell::new(Registrations::default()));
+        let budget=Arc::new(Budget::default());
+        let handlers=Shared::new(Registrations::default());
         let b=budget.clone(); let h=handlers.clone(); let c=core.clone(); let bs=bus.clone(); let e=env.clone();
         let sources=staged.sources.clone();
         let raw_strings:Table=globals.get("string").map_err(|e|e.to_string())?;
@@ -262,8 +308,8 @@ impl Vm {
             }else{None};
             if method=="deploy" {
                 if let Some(Ok(desc))=&descriptor {
-                    if c.borrow_mut().api(id,"cost",json!([desc])).is_ok() {
-                        let ready=c.borrow_mut().api(id,"can_deploy",json!([desc])).unwrap_or(json!(false));
+                    if c.borrow().api_read(id,"cost",json!([desc])).is_ok() {
+                        let ready=c.borrow().api_read(id,"can_deploy",json!([desc])).unwrap_or(json!(false));
                         let can=ready.as_bool().unwrap_or_else(||ready.get(0).and_then(Value::as_bool).unwrap_or(false));
                         if can {cost+=config.task_admission_cost;}
                     }
@@ -283,6 +329,11 @@ impl Vm {
             }
             if cost>config.fuel_per_tick {return Err(lua_error("LIMIT_EXCEEDED: atomic native charge exceeds a tick allowance"));}
             if !b.charge(cost) {return Ok(MultiValue::from_vec(vec![LValue::Boolean(false)]));}
+            // Payload validation/conversion and VM-local work run in parallel.
+            // Only globally observable effects need the deterministic turn gate.
+            let _turn=if matches!(method.as_str(),"deploy"|"print"|"sub"|"unsub"|"tx"|"pub") || method.starts_with("dbg_") {
+                Some(gate.enter(id))
+            }else{None};
             let result:Vec<LValue>=match method.as_str() {
                 name if name.starts_with("dbg_")=>{
                     let tick=c.borrow().tick;
@@ -318,7 +369,7 @@ impl Vm {
                     let Some(values)=value.as_array()else{return Err(lua_error("INVALID_ARGUMENT: await_any requires a dense nonempty list"));};
                     if values.is_empty(){return Err(lua_error("INVALID_ARGUMENT: await_any requires a nonempty list"));}
                     let mut ids=BTreeSet::new();
-                    for value in values {let Some(task)=value.as_u64().filter(|v|*v>0)else{return Err(lua_error("INVALID_ARGUMENT: invalid task ID"));};if c.borrow_mut().api(id,"has_task",json!([task])).ok()!=Some(json!(true)){return Err(lua_error("UNKNOWN_TASK: task not owned by this router"));}ids.insert(task);}
+                    for value in values {let Some(task)=value.as_u64().filter(|v|*v>0)else{return Err(lua_error("INVALID_ARGUMENT: invalid task ID"));};if c.borrow().api_read(id,"has_task",json!([task])).ok()!=Some(json!(true)){return Err(lua_error("UNKNOWN_TASK: task not owned by this router"));}ids.insert(task);}
                     vec![from_json(lua,&json!(ids))?]
                 },
                 "module"=>{
@@ -344,7 +395,7 @@ impl Vm {
                     let args=if let Some(desc)=descriptor {match desc {Ok(v)=>json!([v]),Err(err)=>{if method=="can_deploy"{return Ok(MultiValue::from_vec(vec![LValue::Boolean(true),LValue::Boolean(false),LValue::String(lua.create_string("INVALID_ARGUMENT")?)]));}return Err(err);}}} else {
                         Value::Array(args.iter().map(|v|if matches!(v,LValue::Nil){Ok(Value::Null)}else{to_json(v,config.max_payload_bytes)}).collect::<mlua::Result<_>>()?)
                     };
-                    let result=c.borrow_mut().api(id,&method,args).map_err(lua_error)?;
+                    let result=if method=="deploy"{c.borrow_mut().api(id,&method,args)}else{c.borrow().api_read(id,&method,args)}.map_err(lua_error)?;
                     if method=="deploy" {if let Some(task)=result.as_u64(){if let Some(job)=c.borrow_mut().jobs.get_mut(&task){job.source=source.clone();}}}
                     if method=="others" {let map=lua.create_table()?;if let Some(values)=result.as_object(){for (agent,router) in values {map.raw_set(agent.parse::<u64>().map_err(|_|lua_error("invalid engine agent ID"))?,from_json(lua,router)?)?;}}vec![LValue::Table(map)]}
                     else if method=="can_deploy" {if let Some(values)=result.as_array(){values.iter().map(|v|from_json(lua,v)).collect::<mlua::Result<_>>()?}else{vec![from_json(lua,&result)?]}}else{vec![from_json(lua,&result)?]}
@@ -426,9 +477,10 @@ impl Vm {
 }
 
 pub struct Runtime {
-    pub core: Rc<RefCell<Core>>,
-    bus: Rc<RefCell<Bus>>,
-    debug: Rc<RefCell<crate::debug::Store>>,
+    pub core: Shared<Core>,
+    bus: Shared<Bus>,
+    debug: Shared<crate::debug::Store>,
+    gate: Arc<Gate>,
     vms: BTreeMap<u64,Vm>,
     pub control: String,
     pub run_id: String,
@@ -441,17 +493,55 @@ impl Runtime {
     pub fn new(config:Config,run_id:String)->Result<Self,String>{
         config.validate()?;
         let staged=Staged::load(&config)?;
-        let core=Rc::new(RefCell::new(Core::new(config)?));let bus=Rc::new(RefCell::new(Bus::default()));
+        let core=Shared::new(Core::new(config)?);let bus=Shared::new(Bus::default());
         let agents=core.borrow().agents.iter().map(|(id,a)|(*id,a.router_id)).collect::<Vec<_>>();
         let mut vms=BTreeMap::new();
-        let debug=Rc::new(RefCell::new(crate::debug::Store::default()));
-        for (id,router) in agents {vms.insert(id,Vm::new(id,router,core.clone(),bus.clone(),debug.clone(),&staged)?);}
-        Ok(Self{core,bus,debug,vms,control:"READY".into(),run_id})
+        let debug=Shared::new(crate::debug::Store::default());let gate=Arc::new(Gate::default());
+        for (id,router) in agents {vms.insert(id,Vm::new(id,router,core.clone(),bus.clone(),debug.clone(),gate.clone(),&staged)?);}
+        Ok(Self{core,bus,debug,gate,vms,control:"READY".into(),run_id})
     }
     pub fn step(&mut self)->Result<(),String>{
         if self.control=="FINISHED" {return Ok(());}
         let tick=self.core.borrow().tick;let config=self.core.borrow().config.clone();
-        for vm in self.vms.values_mut() {
+        let mut vms=self.vms.values_mut().collect::<Vec<_>>();
+        for cohort in vms.chunks_mut(VM_COHORT) {
+            self.gate.reset(cohort.iter().map(|vm|vm.id));
+            std::thread::scope(|scope|->Result<(),String>{
+                let mut workers=Vec::new();let mut failure=None;
+                let ids=cohort.iter().map(|vm|vm.id).collect::<Vec<_>>();
+                for (index,vm) in cohort.iter_mut().enumerate() {
+                    let core=self.core.clone();let gate=self.gate.clone();let config=&config;
+                    let worker=std::thread::Builder::new().name(format!("vanguard-agent-{}",vm.id)).spawn_scoped(scope,move || {
+                        let _participant=Participant{gate:gate.clone(),id:vm.id};
+                        Self::step_vm(vm,&core,&gate,tick,config)
+                    });
+                    match worker {
+                        Ok(worker)=>workers.push(worker),
+                        Err(error)=>{
+                            for id in &ids[index..]{self.gate.advance(*id,true);}
+                            failure=Some(format!("could not start agent worker: {error}"));break;
+                        }
+                    }
+                }
+                for worker in workers {
+                    match worker.join(){Ok(Ok(()))=>{},Ok(Err(e))=>{failure.get_or_insert(e);},Err(_)=>{failure.get_or_insert("agent worker panicked".into());}}
+                }
+                failure.map_or(Ok(()),Err)
+            })?;
+        }
+        self.core.borrow_mut().barrier()?;
+        let mut bus=self.bus.borrow_mut();
+        let mut outgoing=std::mem::take(&mut bus.outgoing);outgoing.sort_by_key(|m|(m.sender,m.id));
+        for message in outgoing {for recipient in &message.recipients {if let Some(vm)=self.vms.get_mut(recipient){vm.pending.push_back(message.clone());}}}
+        let pending=self.vms.values().map(|vm|vm.pending.len()).sum::<usize>();if pending>MAX_PENDING{return Err("LIMIT_EXCEEDED: accepted pending message resources exhausted; run stopped".into());}
+        bus.membership.clear();
+        for (id,vm) in &self.vms {for topic in vm.handlers.borrow().topics.keys(){bus.membership.entry(topic.clone()).or_default().insert(*id);}bus.synchronized_fuel.insert(*id,vm.budget.total.get());}
+        let core=self.core.borrow();
+        if config.tick_limit.is_some_and(|limit|core.tick>=limit) || core.score.as_ref().is_some_and(|s|s.defeated_at.is_some() || s.verified_at.is_some()){self.control="FINISHED".into();}
+        Ok(())
+    }
+    fn step_vm(vm:&mut Vm,core:&Shared<Core>,gate:&Gate,tick:u64,config:&Config)->Result<(),String>{
+            let delivery_turn=gate.enter(vm.id);
             let before=vm.budget.total.get();vm.budget.remaining.set(config.fuel_per_tick);
             // Capture recipient handlers when capacity permits delivery, never at send.
             let mut deferred=VecDeque::new();
@@ -460,7 +550,7 @@ impl Runtime {
                 if active>=config.max_handlers {deferred.push_back(message);continue;}
                 let handler=if let Some(topic)=&message.topic {vm.handlers.borrow().topics.get(topic).cloned()}else{vm.handlers.borrow().direct.clone()};
                 let outcome=if handler.is_some(){"delivered"}else{"dropped"};
-                self.core.borrow_mut().emit(if message.topic.is_some(){"publication"}else{"message"},Some(message.sender),&message.source,json!({"message_id":message.id,"sender":message.sender,"recipient":vm.id,"topic":message.topic,"payload":message.payload,"sent_at":message.sent_at,"delivered_at":tick,"outcome":outcome}));
+                core.borrow_mut().emit(if message.topic.is_some(){"publication"}else{"message"},Some(message.sender),&message.source,json!({"message_id":message.id,"sender":message.sender,"recipient":vm.id,"topic":message.topic,"payload":message.payload,"sent_at":message.sent_at,"delivered_at":tick,"outcome":outcome}));
                 if let Some(handler)=handler{
                     let metadata=json!({"message_id":message.id,"sent_at":message.sent_at,"delivered_at":tick});
                     let mut args=vec![LValue::Integer(message.sender as i64)];if let Some(topic)=&message.topic{args.push(LValue::String(vm.lua.create_string(topic).map_err(|e|e.to_string())?));}args.push(from_json(&vm.lua,&message.payload).map_err(|e|e.to_string())?);args.push(from_json(&vm.lua,&metadata).map_err(|e|e.to_string())?);
@@ -468,13 +558,14 @@ impl Runtime {
                 }
             }
             vm.pending=deferred;
+            drop(delivery_turn);
             let mut idle=0;
             while !vm.runnable.is_empty() && vm.budget.remaining.get()>0 {
                 let mut coroutine=vm.runnable.pop_front().unwrap();
                 let ready=match &coroutine.wait {
                     Wait::Runnable=>true,Wait::Tick(until)=>tick>=*until,
-                    Wait::Task(task)=>self.core.borrow_mut().api(vm.id,"is_finished",json!([task]))?==json!(true),
-                    Wait::Any(tasks)=>tasks.iter().any(|task|self.core.borrow_mut().api(vm.id,"is_finished",json!([task])).ok()==Some(json!(true))),
+                    Wait::Task(task)=>core.borrow().api_read(vm.id,"is_finished",json!([task]))?==json!(true),
+                    Wait::Any(tasks)=>tasks.iter().any(|task|core.borrow().api_read(vm.id,"is_finished",json!([task])).ok()==Some(json!(true))),
                 };
                 if !ready {vm.runnable.push_back(coroutine);idle+=1;if idle>=vm.runnable.len(){break;}continue;}
                 idle=0;vm.budget.quantum.set(config.instruction_quantum);
@@ -490,31 +581,24 @@ impl Runtime {
                         };vm.runnable.push_back(coroutine);
                     },
                     Ok(_)=>{},
-                    Err(error)=>{vm.errors+=1;self.core.borrow_mut().emit("runtime_error",Some(vm.id),&coroutine.source,json!({"severity":"error","error":error.to_string(),"sender":coroutine.message.map(|m|m.0),"message_id":coroutine.message.map(|m|m.1)}));},
+                    Err(error)=>{let _turn=gate.enter(vm.id);vm.errors+=1;core.borrow_mut().emit("runtime_error",Some(vm.id),&coroutine.source,json!({"severity":"error","error":error.to_string(),"sender":coroutine.message.map(|m|m.0),"message_id":coroutine.message.map(|m|m.1)}));},
                 }
             }
             vm.last_fuel=vm.budget.total.get()-before;
+            let _turn=gate.enter(vm.id);
             let discarded=std::mem::take(&mut vm.handlers.borrow_mut().discarded);
             vm.pending.retain(|message| {
                 if message.topic.as_ref().is_some_and(|topic|discarded.contains(topic)){
-                    self.core.borrow_mut().emit("publication",Some(message.sender),&message.source,json!({"message_id":message.id,"sender":message.sender,"recipient":vm.id,"topic":message.topic,"outcome":"dropped","reason":"unsubscribed while pending"}));false
+                    core.borrow_mut().emit("publication",Some(message.sender),&message.source,json!({"message_id":message.id,"sender":message.sender,"recipient":vm.id,"topic":message.topic,"outcome":"dropped","reason":"unsubscribed while pending"}));false
                 }else{true}
             });
-            let mut core=self.core.borrow_mut();if let Some(agent)=core.agents.get_mut(&vm.id){agent.last_fuel=vm.last_fuel;agent.fuel=vm.budget.total.get();}
-        }
-        self.core.borrow_mut().barrier()?;
-        let mut bus=self.bus.borrow_mut();
-        let mut outgoing=std::mem::take(&mut bus.outgoing);outgoing.sort_by_key(|m|(m.sender,m.id));
-        for message in outgoing {for recipient in &message.recipients {if let Some(vm)=self.vms.get_mut(recipient){vm.pending.push_back(message.clone());}}}
-        let pending=self.vms.values().map(|vm|vm.pending.len()).sum::<usize>();if pending>MAX_PENDING{return Err("LIMIT_EXCEEDED: accepted pending message resources exhausted; run stopped".into());}
-        bus.membership.clear();
-        for (id,vm) in &self.vms {for topic in vm.handlers.borrow().topics.keys(){bus.membership.entry(topic.clone()).or_default().insert(*id);}bus.synchronized_fuel.insert(*id,vm.budget.total.get());}
-        if config.tick_limit.is_some_and(|limit|self.core.borrow().tick>=limit) || self.core.borrow().score.as_ref().is_some_and(|s|s.defeated_at.is_some() || s.verified_at.is_some()){self.control="FINISHED".into();}
+            let mut core=core.borrow_mut();if let Some(agent)=core.agents.get_mut(&vm.id){agent.last_fuel=vm.last_fuel;agent.fuel=vm.budget.total.get();}
         Ok(())
     }
     pub fn snapshot(&self)->Value{
         let mut snapshot=self.core.borrow().snapshot();
         snapshot["schema_version"]=json!(1);snapshot["run_id"]=json!(self.run_id);snapshot["control"]=json!(self.control);
+        snapshot["execution"]=json!({"scheduler":"parallel-native-round-robin-v1","max_parallel_vms":VM_COHORT});
         snapshot["seq"]=json!(self.core.borrow().sequence);
         if let Some(agents)=snapshot["agents"].as_array_mut(){for agent in agents {if let Some(vm)=agent["id"].as_u64().and_then(|id|self.vms.get(&id)){agent["last_fuel"]=json!(vm.last_fuel);agent["memory_bytes"]=json!(vm.memory.current());agent["peak_memory_bytes"]=json!(vm.memory.peak());agent["coroutines"]=json!(vm.runnable.len());agent["backlog"]=json!(vm.pending.len());agent["runtime_errors"]=json!(vm.errors);agent["allowance"]=json!(self.core.borrow().config.fuel_per_tick);}}}
         let bus=self.bus.borrow();let mut topics=bus.topics.clone();for (topic,subscribers) in &bus.membership {let entry=topics.entry(topic.clone()).or_insert(json!({"topic":topic,"publication_count":0,"last_tick":null}));entry["subscribers"]=json!(subscribers);}

@@ -2,6 +2,32 @@
 
 ## Executed checks
 
+### Parallel Lua router VMs — 2026-11-12
+
+- Enabled mlua's `send` support and moved VM execution onto bounded worker threads
+  in fixed, sorted cohorts of eight. Shared effects use deterministic round-robin
+  turns; read-only queries use shared world locks. Workers join before every
+  world/task/enemy/message barrier. Lua globals, coroutines, module caches, fuel,
+  memory caps and task durations retain their per-router semantics.
+- `VANGUARD_SKIP_UI_BUILD=1 cargo test --quiet`: **48 tests passed**. An instruction
+  hook rendezvous proves eight VMs execute Lua concurrently. Replay checks cover
+  4, 5, 9 and 17 routers, fuel exhaustion, native task admissions, publications,
+  pending handlers and runtime errors across cohort boundaries. Existing sandbox,
+  allocator-limit, scoring, restart and teaching-agent checks pass.
+- `cargo build --release --locked` passed. The 10,000-node final fixture's ordinary
+  API traffic control still wins at **T45 / 999.91**, with zero Lua errors. Two
+  runs match all **46 hashes**; final hash
+  `44bd152cd7fd5bfc33744cbbde0f5f65cc9988e9b9d8bb24bcd7ecee8272014b`.
+- Isolated Lua-only benchmark: 40 router VMs, busy-loop agent, 10 ticks, no hosts,
+  attacks or scored services. Three-run median falls from **2.184 s sequential**
+  to **0.383 s parallel** (about **5.7×** on this machine). This isolates VM speed,
+  not whole-match throughput. Final-network traffic-control runs take 9.64–9.90 s;
+  the shared world/enemy barrier and native effects remain serialized work.
+- Snapshots/hashes record `parallel-native-round-robin-v1` and the fixed cohort
+  size. Historical sequential replay hashes/task IDs need not match this scheduler.
+  Benchmark scripts, saved old binary and replay evidence remain ignored under
+  `.impeccable/review/`.
+
 ### Ten progressive networks — 2026-11-12
 
 - Added `progressive/01-10-nodes/network.toml` through
